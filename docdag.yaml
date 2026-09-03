@@ -1,0 +1,15 @@
+# CMoA decision records, gated by DocDag v0.3.0.
+#
+# The adr preset supplies supersedes / depends-on, status_drift, superseded_orphan,
+# and the accepted_unsuperseded binding projection. This file pins the corpus
+# location and raises a few structural checks so an empty or malformed record
+# fails the gate rather than being skipped.
+preset: adr
+preset_version: 1
+dir: docs/adr
+
+references:
+  dangling: error
+
+structural:
+  missing_frontmatter: error

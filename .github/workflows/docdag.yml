@@ -1,0 +1,42 @@
+name: decisions
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      config: ${{ steps.filter.outputs.config }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            config:
+              - docdag.yaml
+
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Kaikei-e/DocDag@v0.3.0
+        with:
+          version: v0.3.0
+          args: validate --format github
+      - if: always()
+        shell: bash
+        run: docdag validate --format text >> "$GITHUB_STEP_SUMMARY"
+
+  lint:
+    needs: changes
+    if: needs.changes.outputs.config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Kaikei-e/DocDag@v0.3.0
+        with:
+          version: v0.3.0
+          args: lint --format github
