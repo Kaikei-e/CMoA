@@ -1,6 +1,6 @@
 ---
 title: "v0 のスコープをコーディング面の 2 コマンドに限り、Go 標準ライブラリだけで書く"
-status: accepted
+status: superseded
 date: 2026-09-04
 ---
 
@@ -8,7 +8,7 @@ date: 2026-09-04
 
 ## ステータス
 
-Accepted
+Superseded by 0009
 
 採択日: 2026-09-04
 

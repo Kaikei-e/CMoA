@@ -1,18 +1,20 @@
 # Architecture decision records
 
-Eight records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
+Nine records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
 trace schema in [../trace-schema.md](../trace-schema.md) are what the binary does, so a record is
 read for *why* a flag, a status name or a file exists, and the code for what it accepts today.
 Records 0002 onward are written in Japanese, the language they were argued in.
 
-Read **0002 first**: it fixes the scope of v0 — two commands, no daemon, no judge model, Go 1.27 and
-the standard library alone — and the type vocabulary the other records lean on. 0003 through 0008
-each take one of the four responsibilities CMoA owns and settle it; they depend on 0002 and, where
-noted, on each other, and can otherwise be read in any order.
+Read **0009 first**: it fixes the scope of v0 — three commands, no daemon, no judge model, Go 1.27 and
+the standard library alone — and the type vocabulary the other records lean on. It supersedes 0002,
+which said the same with two commands; 0002 stays as the record the others were argued against.
+0003 through 0008 each take one of the four responsibilities CMoA owns and settle it; they depend on
+0002 and, where noted, on each other, and can otherwise be read in any order.
 
-Every record is **Accepted** as of 2026-09-04. A decision that replaces one of these declares
-`supersedes:` in its frontmatter and moves the old record's status to `superseded`; nobody edits an
-accepted record to change what it decided. `docdag validate` is the gate that keeps that true.
+Every record is **Accepted** except 0002, which 0009 superseded on 2026-09-05. A decision that
+replaces one of these declares `supersedes:` in its frontmatter and moves the old record's status to
+`superseded`; nobody edits an accepted record to change what it decided. `docdag validate` is the
+gate that keeps that true.
 
 ## [0001 — adopt DocDag for architecture decision records](0001-adopt-docdag-for-architecture-decision-records.md)
 
@@ -23,7 +25,7 @@ reference to a file nobody wrote becomes a CI finding rather than a thing a revi
 It chooses the `adr` preset over `spec`: CMoA is recording decisions, not publishing a normative
 standard of clauses and conformance tests.
 
-## [0002 — the scope of v0: two commands, and the Go standard library](0002-v0-scope-two-commands-and-go-standard-library.md)
+## [0002 — the scope of v0: two commands, and the Go standard library](0002-v0-scope-two-commands-and-go-standard-library.md) — superseded by 0009
 
 The record that opens the series and mostly says no. v0 is the coding face alone — `propose` and
 `select`, plus `surfaces` and `version`; nothing stays resident, and no judge model is asked
@@ -105,3 +107,15 @@ being arbitrary code that runs. The whole public API is six functions and three 
 cross to the layer above as JSON rather than as Go types, and the internals stay free to move.
 Raising an autonomy level means superseding this record, never editing it — a run's trace has to be
 readable against the rules that were in force when it ran.
+
+## [0009 — a third command, `verify`, and `task.json` version 2](0009-add-verify-command-and-task-v2.md)
+
+The record that replaces 0002 and carries all of it forward except the count. uzushio's `task doctor`
+has to measure the verifier — does a known-good solution pass it, does it catch injected defects —
+and it has to measure the same verifier that `select` uses, not a second implementation of it. So
+`cmoa verify --task --diff` runs one diff through the `select` path (worktree, `git apply`, the task's
+compose file under a unique project name) and prints one JSON object; unlike `select`, its exit code
+follows the result, because the caller is uzushio and the judgement is uzushio's. `task.json` gains a
+version 2 with the reference solution, the mutants and the doctor's thresholds; CMoA reads them and
+computes nothing from them. `verify.kind: band` is reserved for a banded grader and refused until one
+exists.
