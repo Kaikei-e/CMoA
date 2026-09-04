@@ -70,6 +70,11 @@ const (
 
 // Reference is the task's own solution: a unified diff against Rev that the
 // verifier is expected to pass. It measures the verifier's false positives.
+//
+// The diff may be empty. An empty reference says the tree at Rev already is
+// the reference solution, which is what a task built around an existing
+// repository looks like: nothing has been broken, and the verifier is
+// measured for false positives against the code as it stands.
 type Reference struct {
 	Path string // as written in task.json, relative to the task dir
 	Diff string
@@ -339,8 +344,10 @@ func rejectV2Fields(m *manifest) error {
 }
 
 // loadDoctor fills Reference, Mutants and Doctor, reading every declared
-// diff. A declared diff that is missing or empty is a validation error: a
-// doctor that silently skips half its mutants measures nothing.
+// diff. A declared diff that is missing is a validation error: a doctor
+// that silently skips half its mutants measures nothing. An empty mutant is
+// no defect and is refused too; an empty reference is allowed, and means
+// the tree at rev is the reference solution.
 func loadDoctor(t *Task, m *manifest) error {
 	t.Doctor = DoctorSpec{KillRateMin: DefaultKillRateMin, ReferenceRuns: DefaultReferenceRuns}
 	if d := m.Doctor; d != nil {
@@ -358,7 +365,7 @@ func loadDoctor(t *Task, m *manifest) error {
 		}
 	}
 	if r := m.Reference; r != nil {
-		diff, err := t.readDiff(r.Diff)
+		diff, err := t.readDiff(r.Diff, allowEmpty)
 		if err != nil {
 			return &ValidationError{"reference.diff", err.Error()}
 		}
@@ -367,7 +374,7 @@ func loadDoctor(t *Task, m *manifest) error {
 	seen := map[string]bool{}
 	for i, mm := range m.Mutants {
 		at := fmt.Sprintf("mutants[%d]", i)
-		diff, err := t.readDiff(mm.Diff)
+		diff, err := t.readDiff(mm.Diff, requireDiff)
 		if err != nil {
 			return &ValidationError{at + ".diff", err.Error()}
 		}
@@ -406,9 +413,19 @@ func loadDoctor(t *Task, m *manifest) error {
 	return nil
 }
 
+// emptyDiff says whether a declared diff may hold nothing. It is a named
+// type so the two call sites read as what they mean rather than as true and
+// false.
+type emptyDiff bool
+
+const (
+	requireDiff emptyDiff = false // a mutant with no edit is not a defect
+	allowEmpty  emptyDiff = true  // an empty reference is the tree at rev
+)
+
 // readDiff reads a diff declared in task.json. The path is relative to the
-// task directory and may not leave it.
-func (t *Task) readDiff(p string) (string, error) {
+// task directory and may not leave it; the file must exist either way.
+func (t *Task) readDiff(p string, empty emptyDiff) (string, error) {
 	clean, err := cleanTaskPath(p)
 	if err != nil {
 		return "", err
@@ -417,7 +434,7 @@ func (t *Task) readDiff(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if strings.TrimSpace(string(b)) == "" {
+	if !empty && strings.TrimSpace(string(b)) == "" {
 		return "", errors.New(clean + " is empty")
 	}
 	return string(b), nil

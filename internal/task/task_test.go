@@ -91,9 +91,29 @@ func withFiles(t *testing.T, manifest string, files map[string]string) string {
 
 var v2Diffs = map[string]string{
 	"reference.diff":     "--- a/add.go\n+++ b/add.go\n",
+	"empty.diff":         "",
 	"mutants/0001.diff":  "--- a/add.go\n+++ b/add.go\n",
 	"mutants/0002.diff":  "--- a/add.go\n+++ b/add.go\n",
 	"mutants/empty.diff": "  \n",
+}
+
+// The reference diff may be an empty file: it says the tree at rev already
+// is the reference solution, which is what a task built around an existing
+// repository looks like. The file must still exist.
+func TestEmptyReference(t *testing.T) {
+	const m = `{"version":2,"id":"h","repo":"repo","files":["add.go"],"reference":{"diff":"empty.diff"}}`
+	tk, err := Load(withFiles(t, m, v2Diffs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Reference == nil || tk.Reference.Path != "empty.diff" || tk.Reference.Diff != "" {
+		t.Fatalf("reference = %+v", tk.Reference)
+	}
+	// Whitespace is as empty as nothing at all.
+	const ws = `{"version":2,"id":"h","repo":"repo","files":["add.go"],"reference":{"diff":"mutants/empty.diff"}}`
+	if _, err := Load(withFiles(t, ws, v2Diffs)); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestLoadV2(t *testing.T) {
@@ -168,7 +188,6 @@ func TestLoadV2Errors(t *testing.T) {
 		"version":                `{"version":3,"id":"h","repo":"repo","files":["add.go"]}`,
 		"verify.kind":            `{"version":2,"id":"h","repo":"repo","files":["add.go"],"verify":{"kind":"exitcode"}}`,
 		"verify.timeout_seconds": `{"version":2,"id":"h","repo":"repo","files":["add.go"],"verify":{"timeout_seconds":-1}}`,
-		"reference.diff":         `{"version":2,"id":"h","repo":"repo","files":["add.go"],"reference":{"diff":"mutants/empty.diff"}}`,
 		"mutants[0].diff":        `{"version":2,"id":"h","repo":"repo","files":["add.go"],"mutants":[{"diff":"../escape.diff"}]}`,
 		"mutants[1].diff":        `{"version":2,"id":"h","repo":"repo","files":["add.go"],"mutants":[{"diff":"mutants/0001.diff"},{"diff":"mutants/0001.diff"}]}`,
 		"mutants[0].expect":      `{"version":2,"id":"h","repo":"repo","files":["add.go"],"mutants":[{"diff":"mutants/0001.diff","expect":"dead"}]}`,
@@ -198,6 +217,9 @@ func TestLoadV2Errors(t *testing.T) {
 		{"reference.diff", `{"version":2,"id":"h","repo":"repo","files":["add.go"],"reference":{"diff":"/etc/passwd"}}`},
 		{"reference.diff", `{"version":2,"id":"h","repo":"repo","files":["add.go"],"reference":{"diff":""}}`},
 		{"mutants[0].diff", `{"version":2,"id":"h","repo":"repo","files":["add.go"],"mutants":[{"diff":"/etc/passwd"}]}`},
+		// A mutant that changes nothing is no defect, so an empty one is
+		// still refused; only the reference may be empty.
+		{"mutants[0].diff", `{"version":2,"id":"h","repo":"repo","files":["add.go"],"mutants":[{"diff":"mutants/empty.diff"}]}`},
 	}
 	for _, c := range more {
 		_, err := Load(withFiles(t, c.manifest, v2Diffs))

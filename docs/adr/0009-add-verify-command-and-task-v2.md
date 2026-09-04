@@ -90,9 +90,9 @@ v2 は v1 に次を足す。すべて任意。
 
 | キー | 内容 |
 | --- | --- |
-| `verify.kind` | `exit-code`（既定）または `band`。`band` は語彙として予約するだけで、指定されたコマンドは「未実装」として exit 2 で拒否する |
+| `verify.kind` | `exit-code`（既定）または `band`。`band` は `verify` が実装する（下の判定規則）。`select` は `exit-code` のみを扱い、`band` の Task は exit 3 で拒否する |
 | `verify.timeout_seconds` | Task 側のタイムアウト。フラグ > Task > 設定の順で効く |
-| `reference.diff` | 全 grader を通る正解の unified diff（`rev` に対して）。候補と同じ形 |
+| `reference.diff` | 全 grader を通る正解の unified diff（`rev` に対して）。候補と同じ形。**空ファイルでよい**——「`rev` の木がそのまま正解である」を意味する |
 | `mutants[]` | `diff`（正解に対して当てる unified diff）、`expect`（`killed` / `equivalent`、既定 `killed`）、`origin`（`hand` / `generated`、既定 `hand`）、`operator`、`note` |
 | `doctor` | `kill_rate_min`（既定 0.8）、`reference_runs`（既定 3） |
 
@@ -101,14 +101,46 @@ v2 は v1 に次を足す。すべて任意。
 の仕事である。CMoA がスキーマを持つのは、Task の定義は CMoA が読む `task.json` にあるべきで、
 uzushio が別のマニフェストを重ねると「同じ Task」が 2 つの定義を持つためである。
 
-`band` を予約だけする理由は、帯域判定型の grader（測定値が [lo, hi] に入るか）が実在する
-（性能ゲート）一方で、それを容れる Task がまだこのリポジトリにないからである。語だけ先に置くのは、
-`exit-code` が「唯一の種別」ではなく「既定の種別」であることを v2 の読み手に示すためである。
+`band` を実装する理由は、帯域判定型の grader（測定値が [lo, hi] に入るか）が実在し——性能ゲート——
+その最初の実体が uzushio の外部 Task として現れたからである。終了コードは「どの不変量が動いたか」を
+言えない。そこで `band` の verifier は **標準出力に CSV を 1 ブロック印字する**契約とする。ヘッダ行は
+
+```
+invariant,value,ci_half,band_lo,band_hi,verdict
+```
+
+ちょうどこの並びで、以降 1 不変量 1 行。`verdict` は `pass` / `fail` / `skipped` / `info`。
+4 つの数値は空でよい（`skipped`・`info` は通常空）。それ以外の行はコンテナ自身のログとして無視する
+（ゲートに出力の清潔さを要求しない）。ブロックは 6 フィールドの CSV レコードでない行で終わる。
+ブロックが複数あれば **最後のもの**を読む——測り直すゲートは、数える方の実行を最後に印字する。
+
+判定は次のとおり。
+
+| status | 条件 |
+| --- | --- |
+| `fail` | `verdict: fail` の行が 1 つでもある。コンテナの終了コードが何であっても |
+| `pass` | 行が読め、`fail` が無く、コンテナが 0 で終わった。`skipped` は pass を妨げない |
+| `runner_error` | ヘッダが無い／ヘッダの下に行が無い／行が解釈できない（`error` は「band verifier printed no gate CSV」等）。あるいは全ての帯域が守られたのにコンテナが非 0 で終わった（`error` に終了コード）——ハーネスが壊れたのであって、被検コードについては何も言っていない（ADR-0005 の区別） |
+| `apply_failed` / `timeout` | `exit-code` と同じ |
+
+`exit_code` はどの場合もコンテナのものを残す。結果 JSON は `band` オブジェクト
+（`judged`・`failed[]`・`skipped[]`・`rows[]`）を得る。数値は JSON の数または `null` で、
+`null` は「測っていない」であって 0 ではない。詳細は `docs/trace-schema.md`。
+
+`select` は `band` を扱わない。帯域型ゲートは測るものであり、測定に対して候補を提案する Task の形は
+まだ無い。`select` に `band` の Task を渡せば exit 3（Task エラー）で断る——コンテナの終了コードを、
+それが担っていない判定として読むよりよい。
+
+`reference.diff` を空ファイルで許すのも同じ Task 由来である。既存のリポジトリを包んだ Task では
+「壊されていない木」がそのまま正解であり、偽陽性率はその木を verifier に何度か通して測る。
+ファイルの存在は要求し（宣言した diff が無いのは誤りのまま）、中身が空であることだけを許す。
+mutant の diff は空を許さない——何も変えない mutant は欠陥ではない。
 
 ### D4. Go 1.27、標準ライブラリのみ（0002 D3 を引き継ぐ）
 
-`go.mod` は `require` を持たない。`verify` が新たに使うものは無い（`internal/worktree`、`internal/patch`、
-`internal/verify`、`internal/trace` の既存の部品を組み合わせる）。
+`go.mod` は `require` を持たない。`verify` が新たに使う外部のものは無い（`internal/worktree`、
+`internal/patch`、`internal/verify`、`internal/trace` の既存の部品を組み合わせる）。`band` の CSV は
+標準の `encoding/csv` で読む。
 
 ### D5. cobra を採用しない（0002 D4 を引き継ぐ）
 
@@ -116,15 +148,17 @@ uzushio が別のマニフェストを重ねると「同じ Task」が 2 つの�
 
 ### D6. 型表現は素の Go とリンタで得る（0002 D5 を引き継ぐ）
 
-`verify.kind`、`mutants[].expect`、`mutants[].origin` は名前付き文字列型＋定数で、`exhaustive` が
-網羅性を見る。外部入力（task.json）からの構築は `Parse*` または `Load` の検証を通る。
+`verify.kind`、`mutants[].expect`、`mutants[].origin`、`band` の `verdict` は名前付き文字列型＋定数で、
+`exhaustive` が網羅性を見る。外部入力（task.json、コンテナの標準出力）からの構築は `Parse*` または
+`Load` の検証を通る。
 
 ### D7. fp-go を採用しない（0002 D6 を引き継ぐ）
 
 ### D8. パッケージ配置（0002 D7 を引き継ぐ）
 
-`verify` は `cmd/cmoa` に分岐を足し、`internal/task` に v2 のフィールドを足すだけで、新しいパッケージは
-増やさない。
+`verify` は `cmd/cmoa` に分岐を足し、`internal/task` に v2 のフィールドを足す。新しいパッケージは
+`internal/band` の 1 つだけで、それは CSV を読んで `trace.Band` を返すのみ——「その行が何を意味するか」
+（`fail` か `runner_error` か）は語彙のある `cmd/cmoa` が決める。`verify.ComposeRunner` は変えない。
 
 ## 根拠（調査結果・出典）
 
@@ -148,6 +182,12 @@ uzushio が別のマニフェストを重ねると「同じ Task」が 2 つの�
   （ADR-0001 の運用、DocDag の `status_drift` が検査）。
 - **0002 を supersede せず、0009 を「追加」として depends-on だけで足す。** 不採用。0002 D2 は
   「コマンドは 2 つ」と言い切っており、それが変わったのだから 0002 は現行の決定ではない。
+- **`band` の verifier に JSON を印字させる。** 不採用。帯域ゲートは既に CSV を書いている（表として
+  人が読み、差分として保存されている）ものが多く、JSON を要求すれば Task 側に出力層を 1 つ足させる。
+  CSV は行指向なのでログに混ざっても切り出せる。
+- **`band` の判定（帯域に入るか）を CMoA 側で行い、閾値を `task.json` に持つ。** 不採用。帯域は
+  測る側の資産であり、CMoA が写しを持てば同じ帯域が 2 つの定義を持つ（`doctor.json` を断ったのと
+  同じ理由）。CMoA は verifier が出した `verdict` を読むだけにする。
 - **`verify` の結果を `<task>/runs/` にトレースとして書く。** 不採用。run はハーネスを読んで候補を
   作り選ぶ一連の記録であり、単発の検証は run ではない。トレーススキーマに種別を足すより、呼び手が
   自分の記録に保存する方が境界が保たれる。
@@ -157,8 +197,10 @@ uzushio が別のマニフェストを重ねると「同じ Task」が 2 つの�
 - 得るもの：uzushio の `task doctor` が CMoA と同じ verifier で測る。Task の定義が 1 ファイルに保たれる。
 - 失うもの：0002 の「コマンドは 2 つ」という言い切りの単純さ。`verify` は `select` と同じ経路を通るが、
   終了コードの意味が `select` と違う（D2 に理由を書いた）。
-- リスク：`band` を予約語にしたまま実装しない期間が長引くと、語が形骸化する。Plecto 系の性能ゲートを
-  Task にするときに実装するか、supersede して語を消す。
+- リスク：`band` の契約は CSV というテキストの一致であり、ゲート側の出力が変われば静かに
+  `runner_error` になる。ヘッダの完全一致を要求し、読めなければ `pass` にしないのはそのためで、
+  「答えなかった」は「通った」ではない。もう一つのリスクは `select` が `band` を扱えないまま
+  残ることで、帯域型ゲートに対して候補を提案する形が要るようになったら、その時に決めて supersede する。
 
 ## 関連ADR
 

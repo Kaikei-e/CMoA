@@ -12,6 +12,8 @@ for a in "$@"; do
   esac
 done
 if [ -n "$FAKE_DOCKER_SLEEP" ]; then sleep "$FAKE_DOCKER_SLEEP"; fi
-echo "test output"
+# FAKE_DOCKER_STDOUT names a file to print instead of the default line, so a
+# test can hand the caller a band verifier's gate CSV.
+if [ -n "$FAKE_DOCKER_STDOUT" ]; then cat "$FAKE_DOCKER_STDOUT"; else echo "test output"; fi
 echo "some warning" >&2
 exit "${FAKE_DOCKER_EXIT:-0}"

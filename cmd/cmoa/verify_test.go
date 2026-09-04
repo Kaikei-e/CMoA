@@ -42,6 +42,19 @@ const (
 	manifestV1     = `{"version":1,"id":"hello","repo":"repo","files":["add.go"]}`
 	manifestV2Band = `{"version":2,"id":"hello","repo":"repo","files":["add.go"],
 	"verify":{"kind":"band"}}`
+	// The reference diff is the empty file the fixture writes: the tree at
+	// rev is the reference solution.
+	manifestV2EmptyReference = `{"version":2,"id":"hello","repo":"repo","files":["add.go"],
+	"reference":{"diff":"empty.diff"}}`
+	// gateCSV is what a band verifier prints: a block among its own logs.
+	gateCSVPass = "building the gate\n" +
+		"invariant,value,ci_half,band_lo,band_hi,verdict\n" +
+		"p99_latency_ms,12.5,0.4,0,15,pass\n" +
+		"tail_alloc_bytes,,,,,skipped\n" +
+		"teardown\n"
+	gateCSVFail = "invariant,value,ci_half,band_lo,band_hi,verdict\n" +
+		"p99_latency_ms,21,0.4,0,15,fail\n" +
+		"throughput_rps,1400,12,1000,2000,pass\n"
 )
 
 func write(t *testing.T, path, content string) {
@@ -326,17 +339,143 @@ func TestVerifyTimeout(t *testing.T) {
 	}
 }
 
-func TestVerifyBandNotImplemented(t *testing.T) {
+// bandStdout makes the fake docker print stdout instead of its usual line.
+func bandStdout(t *testing.T, stdout string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "gate.txt")
+	write(t, path, stdout)
+	t.Setenv("FAKE_DOCKER_STDOUT", path)
+}
+
+// A band verifier is judged on the CSV it printed, not on its exit code.
+// Skipped invariants do not withhold a pass.
+func TestVerifyBandPass(t *testing.T) {
 	dir := verifyFixture(t, manifestV2Band)
+	bandStdout(t, gateCSVPass)
+	code, v, errb := runVerify(t, "--task", dir, "--diff", filepath.Join(dir, "fix.diff"), "--label", "band-pass")
+	if code != exitOK || v == nil {
+		t.Fatalf("exit %d: %s", code, errb)
+	}
+	if v.Status != trace.VerifyPass || v.ExitCode != 0 || v.Error != "" {
+		t.Fatalf("%+v", v)
+	}
+	b := v.Band
+	if b == nil || b.Judged != 1 || len(b.Failed) != 0 || len(b.Rows) != 2 {
+		t.Fatalf("band = %+v", b)
+	}
+	if len(b.Skipped) != 1 || b.Skipped[0] != "tail_alloc_bytes" {
+		t.Fatalf("skipped = %v", b.Skipped)
+	}
+	if b.Rows[0].Value == nil || *b.Rows[0].Value != 12.5 || b.Rows[0].Verdict != trace.BandPass {
+		t.Fatalf("rows[0] = %+v", b.Rows[0])
+	}
+	if b.Rows[1].Value != nil || b.Rows[1].BandHi != nil || b.Rows[1].Verdict != trace.BandSkipped {
+		t.Fatalf("rows[1] = %+v", b.Rows[1])
+	}
+}
+
+// One invariant outside its band is a fail, whatever the container exited.
+func TestVerifyBandFail(t *testing.T) {
+	dir := verifyFixture(t, manifestV2Band)
+	bandStdout(t, gateCSVFail)
+	t.Setenv("FAKE_DOCKER_EXIT", "1")
+	code, v, errb := runVerify(t, "--task", dir, "--diff", filepath.Join(dir, "fix.diff"), "--label", "band-fail")
+	if code != exitVerifyNo || v == nil {
+		t.Fatalf("exit %d: %s", code, errb)
+	}
+	if v.Status != trace.VerifyFail || v.ExitCode != 1 {
+		t.Fatalf("%+v", v)
+	}
+	b := v.Band
+	if b == nil || b.Judged != 2 || len(b.Failed) != 1 || b.Failed[0] != "p99_latency_ms" {
+		t.Fatalf("band = %+v", b)
+	}
+}
+
+// Every band held and the container still failed: the harness broke, which
+// says nothing about the code under test.
+func TestVerifyBandExitWithoutFailure(t *testing.T) {
+	dir := verifyFixture(t, manifestV2Band)
+	bandStdout(t, gateCSVPass)
+	t.Setenv("FAKE_DOCKER_EXIT", "1")
+	code, v, errb := runVerify(t, "--task", dir, "--diff", filepath.Join(dir, "fix.diff"), "--label", "band-broken")
+	if code != exitVerifyRunner || v == nil {
+		t.Fatalf("exit %d: %s", code, errb)
+	}
+	if v.Status != trace.VerifyRunnerError || !strings.Contains(v.Error, "exited 1") {
+		t.Fatalf("%+v", v)
+	}
+	if v.Band == nil || len(v.Band.Rows) != 2 {
+		t.Fatalf("the rows it did print are still recorded: %+v", v.Band)
+	}
+}
+
+// No CSV at all is a runner error: the verifier did not answer.
+func TestVerifyBandNoCSV(t *testing.T) {
+	cases := map[string]string{
+		"no header": "test output\n",
+		"no rows":   "invariant,value,ci_half,band_lo,band_hi,verdict\ndone\n",
+		"bad row":   "invariant,value,ci_half,band_lo,band_hi,verdict\nrps,fast,0,0,1,pass\n",
+		"bad verdict": "invariant,value,ci_half,band_lo,band_hi,verdict\n" +
+			"rps,900,10,800,1000,probably\n",
+	}
+	for name, stdout := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := verifyFixture(t, manifestV2Band)
+			bandStdout(t, stdout)
+			code, v, errb := runVerify(t, "--task", dir, "--diff", filepath.Join(dir, "fix.diff"), "--label", "band-silent")
+			if code != exitVerifyRunner || v == nil {
+				t.Fatalf("exit %d: %s", code, errb)
+			}
+			if v.Status != trace.VerifyRunnerError || v.Band != nil {
+				t.Fatalf("%+v", v)
+			}
+			if !strings.Contains(v.Error, "gate CSV") {
+				t.Fatalf("error = %q", v.Error)
+			}
+		})
+	}
+}
+
+// An exit-code task is unaffected: no band object appears in its result.
+func TestVerifyExitCodeHasNoBand(t *testing.T) {
+	dir := verifyFixture(t, manifestV2)
+	bandStdout(t, gateCSVFail)
 	code, v, errb := runVerify(t, "--task", dir, "--diff", filepath.Join(dir, "fix.diff"))
-	if code != exitUsage || v != nil {
-		t.Fatalf("exit %d, %+v", code, v)
+	if code != exitOK || v == nil || v.Status != trace.VerifyPass || v.Band != nil {
+		t.Fatalf("exit %d, %+v: %s", code, v, errb)
 	}
-	if !strings.Contains(errb, "verify.kind band is not implemented") {
-		t.Fatalf("stderr = %q", errb)
+}
+
+// A reference diff may be an empty file: the tree at rev is the reference
+// solution, and verifying it measures the verifier's false positives.
+func TestVerifyEmptyReference(t *testing.T) {
+	dir := verifyFixture(t, manifestV2EmptyReference)
+	tk, err := task.Load(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if b, err := os.ReadFile(os.Getenv("FAKE_DOCKER_LOG")); err == nil && len(b) > 0 {
-		t.Fatalf("docker ran for a band verifier: %s", b)
+	if tk.Reference == nil || tk.Reference.Path != "empty.diff" || tk.Reference.Diff != "" {
+		t.Fatalf("reference = %+v", tk.Reference)
+	}
+	code, v, errb := runVerify(t, "--task", dir, "--diff", filepath.Join(dir, "empty.diff"), "--label", "reference-1")
+	if code != exitOK || v == nil || v.Status != trace.VerifyPass {
+		t.Fatalf("exit %d: %+v: %s", code, v, errb)
+	}
+}
+
+// select judges candidates on exit-code verifiers only; a band task is a
+// task error, not a run that produced nothing.
+func TestSelectRefusesBandTask(t *testing.T) {
+	dir := verifyFixture(t, manifestV2Band)
+	write(t, filepath.Join(dir, "cmoa.json"), `{"version":1,
+	"proposers":[{"id":"p1","base_url":"http://127.0.0.1:1","model":"m"}],"harness":{"vault":"v"}}`)
+	var out, errb bytes.Buffer
+	if code := run([]string{"select", "--task", dir}, &out, &errb); code != exitInvalid {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "verify.kind band") || out.Len() != 0 {
+		t.Fatalf("stdout %q, stderr %q", out.String(), errb.String())
 	}
 }
 

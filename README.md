@@ -42,8 +42,15 @@ verifier's parallelism and timeout. A task is a directory holding
 `task.json`, `instruction.md` and a `compose.yaml` with a `verify` service;
 see `examples/task-hello`. `task.json` version 2 adds the task's own
 reference solution and a set of mutants, so a layer above can ask how good
-the verifier is; version 1 files keep their meaning. What a run leaves
-behind is described in [docs/trace-schema.md](docs/trace-schema.md).
+the verifier is; version 1 files keep their meaning. The reference diff may
+be an empty file, which says the tree at `rev` already is the reference
+solution. Version 2 also chooses how the verifier answers: `verify.kind:
+exit-code` (the default) reads the container's exit status, while `band`
+reads a CSV of measured invariants and their bands off its stdout, so a
+performance gate can say *which* invariant moved. `cmoa verify` judges both
+kinds; `cmoa select` judges exit-code verifiers only. What a run leaves
+behind, and the band CSV's contract, are in
+[docs/trace-schema.md](docs/trace-schema.md).
 
 ## Scope
 
