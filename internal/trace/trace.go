@@ -206,9 +206,11 @@ type DiffStats struct {
 	SHA256    string   `json:"sha256"`
 }
 
-// VerifyResult is verify/<proposer-id>/result.json.
+// VerifyResult is verify/<proposer-id>/result.json. It is also embedded in
+// Verification, which has no candidate; the id is omitted when empty for
+// that reason only. Inside a run it is always set.
 type VerifyResult struct {
-	CandidateID string       `json:"candidate_id"`
+	CandidateID string       `json:"candidate_id,omitempty"`
 	Status      VerifyStatus `json:"status"`
 	ExitCode    int          `json:"exit_code"`
 	DurationMS  int64        `json:"duration_ms"`
@@ -218,6 +220,21 @@ type VerifyResult struct {
 	Error       string       `json:"error,omitempty"`
 	StartedAt   time.Time    `json:"started_at"`
 	FinishedAt  time.Time    `json:"finished_at"`
+}
+
+// Verification is one verification outside a run: what `cmoa verify` prints
+// on stdout and writes as result.json with --out. The embedded VerifyResult
+// says what the verifier did, in the same vocabulary select uses (`skipped`
+// excepted: nothing is skipped when a diff is named on the command line);
+// the surrounding fields say what was verified.
+type Verification struct {
+	SchemaVersion int    `json:"schema_version"`
+	Task          string `json:"task"`
+	Rev           string `json:"rev"`         // the resolved commit SHA
+	DiffSHA256    string `json:"diff_sha256"` // of the diff bytes as read
+	Label         string `json:"label"`
+	VerifyResult
+	CMoAVersion string `json:"cmoa_version"`
 }
 
 // Select is select.json.
@@ -359,6 +376,28 @@ func (d Dir) WriteVerify(r *VerifyResult, stdout, stderr []byte) error {
 	}
 	return writeJSON(d.VerifyResult(r.CandidateID), r)
 }
+
+// WriteVerification writes result.json, stdout.txt and stderr.txt into dir,
+// which is created if it does not exist. result.json is write-once: a
+// verification directory records one verification.
+func WriteVerification(dir string, v *Verification, stdout, stderr []byte) error {
+	if _, err := os.Stat(VerificationFile(dir)); err == nil {
+		return fmt.Errorf("%w: %s", ErrExists, VerificationFile(dir))
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(filepath.Join(dir, "stdout.txt"), stdout); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(filepath.Join(dir, "stderr.txt"), stderr); err != nil {
+		return err
+	}
+	return writeJSONOnce(filepath.Join(dir, "result.json"), v)
+}
+
+// VerificationFile is the result.json WriteVerification writes into dir.
+func VerificationFile(dir string) string { return filepath.Join(dir, "result.json") }
 
 // ReadRun reads run.json.
 func (d Dir) ReadRun() (*Run, error) {

@@ -239,12 +239,18 @@ func verifyOne(ctx context.Context, cfg *config.Config, t *task.Task, rev string
 		res.ApplyError = err.Error()
 		return res, nil, nil, nil
 	}
+	// A task that names its own verifier timeout knows better than the
+	// configuration how long its verifier needs.
+	timeout := time.Duration(cfg.Verify.TimeoutSeconds) * time.Second
+	if t.Verify.TimeoutSeconds > 0 {
+		timeout = time.Duration(t.Verify.TimeoutSeconds) * time.Second
+	}
 	spec := verify.Spec{
 		ComposeFile:  t.Verify.ComposeFile,
 		Service:      t.Verify.Service,
 		ProjectName:  verify.ProjectName(string(t.ID), string(dir.ID()), string(id)),
 		CandidateDir: wt,
-		Timeout:      time.Duration(cfg.Verify.TimeoutSeconds) * time.Second,
+		Timeout:      timeout,
 	}
 	res.ProjectName = spec.ProjectName
 	logf("%s: verifying in %s", id, spec.ProjectName)

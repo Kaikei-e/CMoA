@@ -7,9 +7,9 @@ are not.
 
 | step | layer | what lands | status |
 | --- | --- | --- | --- |
-| 1 | DocDag | public `config` package and YAML round-trip tests, so uzushio can build its vault configuration in Go | pending |
-| 2 | uzushio | vault configuration written in Go; `docdag lint` and `lint --fixtures` pass | pending |
-| 3 | uzushio | `task doctor`: kill rate against injected defects, false-positive rate against a reference solution | pending |
+| 1 | DocDag | public `config` package and YAML round-trip tests, so uzushio can build its vault configuration in Go | shipped ([DocDag v0.4.0](https://github.com/Kaikei-e/DocDag/releases/tag/v0.4.0), 2026-09-04) |
+| 2 | uzushio | vault configuration written in Go; `docdag lint` and `lint --fixtures` pass | shipped ([uzushio#1](https://github.com/Kaikei-e/uzushio/pull/1), 2026-09-05) |
+| 3 | uzushio | `task doctor`: kill rate against injected defects, false-positive rate against a reference solution. CMoA contributes `cmoa verify` and `task.json` version 2 ([ADR 0009](adr/0009-add-verify-command-and-task-v2.md)) | in progress |
 | 4 | **CMoA** | **v0, coding face: `propose` and `select`, verifier-selected, no judge** | shipped (this repository) |
 | 5 | uzushio | `run` and `improve`: held-in and held-out splits, sequential testing, edits accepted only when both pass | pending |
 | 6 | uzushio | the first task manifest carries the constraints learned from the previous project: one milestone per session, a ceiling on test lines per product line, dogfooding kept off the critical path | pending |
@@ -26,6 +26,9 @@ are not.
   uzushio measurement that a later CMoA version will read.
 - No self-editing. CMoA declares which harness surfaces may be edited
   (`cmoa surfaces`); proposing and validating edits is uzushio's loop.
+- No mutant generation and no kill-rate arithmetic. `cmoa verify` answers
+  one question about one diff; reading `reference` and `mutants` out of
+  `task.json` is as far as CMoA goes, and `task doctor` is uzushio's.
 
 ## Decisions behind the order
 

@@ -57,6 +57,34 @@ query --binding` in the vault reconstructs what the run read.
 | `exit_code`, `duration_ms`, `command`, `project_name` | the compose invocation |
 | `apply_error`, `error` | text when relevant |
 
+## verify (single verification)
+
+`cmoa verify --task <dir> --diff <file>` verifies one diff outside any run.
+It prints exactly one JSON object on stdout, and with `--out <dir>` writes
+the same object as `<dir>/result.json` alongside `stdout.txt` and
+`stderr.txt` (the container's output). It writes nothing under `runs/`.
+`result.json` is write-once: a verification directory records one
+verification. The directory is created and checked before the verifier runs;
+if the result still cannot be written afterwards, the status becomes
+`runner_error` and the JSON object is printed all the same.
+
+| field | meaning |
+| --- | --- |
+| `schema_version` | 1 |
+| `task` | the task id |
+| `rev` | the commit SHA the worktree was made at |
+| `diff_sha256` | of the diff bytes as read, so a caller can pin what was verified |
+| `label` | `--label`, or 8 hex digits; it names the compose project `cmoa-<task>-verify-<label>`, so a label must match `^[a-z0-9][a-z0-9_-]{0,63}$` and one that does not is refused rather than rewritten |
+| `status` | as in `verify/<id>/result.json` above, minus `skipped`: `pass`, `fail`, `apply_failed`, `timeout`, `runner_error` |
+| `exit_code`, `duration_ms`, `command`, `project_name` | the compose invocation |
+| `apply_error`, `error` | text when relevant; absent when empty. Without `--out`, a `runner_error` folds the tail of the container's stderr into `error` |
+| `started_at`, `finished_at` | UTC |
+| `cmoa_version` | the binary that produced it |
+
+The process exit code is 0 when the status is `pass`, 1 when the verifier
+answered no (`fail`, `apply_failed`, `timeout`), 2 on a usage or task error
+(nothing is printed on stdout), 3 on `runner_error`.
+
 ## select.json
 
 | field | meaning |
