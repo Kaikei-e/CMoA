@@ -1,0 +1,6 @@
+#!/bin/sh
+case "$1" in
+  --version) echo "docdag version v0.3.0-test"; exit 0 ;;
+  query) echo '[{"id":"0001","title":"T","status":"accepted","path":"docs/adr/0001-t.md"}]'; exit 0 ;;
+esac
+exit 2

@@ -1,0 +1,13 @@
+# Task
+
+{{.Instruction}}
+# Files
+
+{{range .Files}}## {{.Path}}
+
+```
+{{.Content}}```
+
+{{end}}# Output
+
+One ```diff block containing a unified diff against the files above. Nothing else.

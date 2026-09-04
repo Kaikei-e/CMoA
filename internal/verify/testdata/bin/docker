@@ -1,0 +1,17 @@
+#!/bin/sh
+# Fake docker for tests: logs argv and CMOA_CANDIDATE_DIR, exits per FAKE_DOCKER_EXIT.
+echo "$* [$CMOA_CANDIDATE_DIR]" >> "${FAKE_DOCKER_LOG:?}"
+case "$1" in
+  ps) if [ -n "$FAKE_DOCKER_LEFTOVER" ]; then echo "abc123"; fi; exit 0 ;;
+  rm) exit 0 ;;
+esac
+for a in "$@"; do
+  case "$a" in
+    down) exit 0 ;;
+    run) ;;
+  esac
+done
+if [ -n "$FAKE_DOCKER_SLEEP" ]; then sleep "$FAKE_DOCKER_SLEEP"; fi
+echo "test output"
+echo "some warning" >&2
+exit "${FAKE_DOCKER_EXIT:-0}"
