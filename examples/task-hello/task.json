@@ -1,8 +1,14 @@
 {
-  "version": 1,
+  "version": 2,
   "id": "hello",
   "repo": "repo",
   "rev": "HEAD",
   "files": ["add.go", "add_test.go"],
-  "verify": {"compose_file": "compose.yaml", "service": "verify"}
+  "verify": {"compose_file": "compose.yaml", "service": "verify", "kind": "exit-code", "timeout_seconds": 600},
+  "reference": {"diff": "reference.diff"},
+  "mutants": [
+    {"diff": "mutants/0001-add-times.diff", "expect": "killed", "origin": "hand", "operator": "", "note": "add.go:7: Add multiplies instead of adding"},
+    {"diff": "mutants/0002-add-swapped.diff", "expect": "killed", "origin": "hand", "operator": "", "note": "add.go:7: Add subtracts its arguments the wrong way round"}
+  ],
+  "doctor": {"kill_rate_min": 0.8, "reference_runs": 3}
 }

@@ -21,15 +21,18 @@ on uzushio; uzushio depends on it.
 **v0, coding face.** `cmoa propose` asks every configured proposer for a
 unified diff; `cmoa select` applies each diff to its own git worktree,
 runs the task's verifier in a container, and selects the first candidate
-in configured order that passes. There is no judge model, no daemon and no
-dependency outside the Go standard library. What comes next, and in what
-order, is in [docs/roadmap.md](docs/roadmap.md).
+in configured order that passes. `cmoa verify` runs that same verification
+for one diff named on the command line, so the verifier itself can be
+measured. There is no judge model, no daemon and no dependency outside the
+Go standard library. What comes next, and in what order, is in
+[docs/roadmap.md](docs/roadmap.md).
 
 ```sh
 go build -o bin/cmoa ./cmd/cmoa
 cd examples/task-hello && ./setup.sh
 cmoa propose --task . --config /path/to/cmoa.json     # writes runs/<run-id>/
 cmoa select  --task .                                  # verifies, writes select.json
+cmoa verify  --task . --diff reference.diff            # one diff, one JSON object
 cmoa surfaces                                          # the editable surfaces
 ```
 
@@ -37,8 +40,10 @@ cmoa surfaces                                          # the editable surfaces
 endpoint, such as `llama-server`), the DocDag vault the run reads, and the
 verifier's parallelism and timeout. A task is a directory holding
 `task.json`, `instruction.md` and a `compose.yaml` with a `verify` service;
-see `examples/task-hello`. What a run leaves behind is described in
-[docs/trace-schema.md](docs/trace-schema.md).
+see `examples/task-hello`. `task.json` version 2 adds the task's own
+reference solution and a set of mutants, so a layer above can ask how good
+the verifier is; version 1 files keep their meaning. What a run leaves
+behind is described in [docs/trace-schema.md](docs/trace-schema.md).
 
 ## Scope
 

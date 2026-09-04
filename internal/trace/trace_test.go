@@ -1,6 +1,8 @@
 package trace
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -103,5 +105,45 @@ func TestCandidateAndVerifyFiles(t *testing.T) {
 		if e.Name()[0] == '.' {
 			t.Fatalf("temp file left behind: %s", e.Name())
 		}
+	}
+}
+
+func TestWriteVerification(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "verification")
+	v := &Verification{
+		SchemaVersion: SchemaVersion,
+		Task:          "hello",
+		Rev:           "0123456789abcdef0123456789abcdef01234567",
+		DiffSHA256:    "deadbeef",
+		Label:         "reference-1",
+		VerifyResult:  VerifyResult{Status: VerifyPass, StartedAt: time.Now().UTC()},
+		CMoAVersion:   "dev",
+	}
+	if err := WriteVerification(dir, v, []byte("out"), []byte("err")); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"stdout.txt": "out", "stderr.txt": "err"} {
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(b) != want {
+			t.Errorf("%s = %q, %v", name, b, err)
+		}
+	}
+	b, err := os.ReadFile(VerificationFile(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The verification has no candidate; the embedded field is omitted.
+	if bytes.Contains(b, []byte("candidate_id")) {
+		t.Errorf("result.json = %s", b)
+	}
+	var got Verification
+	if err := json.Unmarshal(b, &got); err != nil || got.Label != "reference-1" || got.Status != VerifyPass {
+		t.Fatalf("%+v: %v", got, err)
+	}
+	// A verification directory records one verification.
+	if err := WriteVerification(dir, v, nil, nil); !errors.Is(err, ErrExists) {
+		t.Fatalf("second WriteVerification = %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "stdout.txt")); string(b) != "out" {
+		t.Error("a refused write must not touch stdout.txt")
 	}
 }

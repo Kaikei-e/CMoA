@@ -2,12 +2,16 @@
 //
 //	cmoa propose --task <dir> [--config <file>] [--as-of YYYY-MM-DD] [--run-id <id>]
 //	cmoa select  --task <dir> [--config <file>] [--run <run-dir>]
+//	cmoa verify  --task <dir> --diff <file> [--out <dir>] [--timeout <dur>] [--label <name>] [--config <file>]
 //	cmoa surfaces [--format text|json]
 //	cmoa version
 //
 // Exit codes: 0 success, 1 runtime error, 2 usage, 3 configuration or task
 // validation error. select exits 0 whatever the Selection is; the outcome
-// is in select.json and on stdout.
+// is in select.json and on stdout. verify answers about one diff, so it
+// spends the codes differently: 0 the verifier passed, 1 it answered no
+// (fail, apply_failed, timeout), 2 usage or task error, 3 the verifier
+// could not be run.
 package main
 
 import (
@@ -53,6 +57,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return cmdPropose(ctx, args[1:], stdout, stderr, logf)
 	case "select":
 		return cmdSelect(ctx, args[1:], stdout, stderr, logf)
+	case "verify":
+		return cmdVerify(ctx, args[1:], stdout, stderr, logf)
 	case "surfaces":
 		return cmdSurfaces(args[1:], stdout, stderr)
 	case "version":
@@ -71,6 +77,7 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage:
   cmoa propose --task <dir> [--config <file>] [--as-of YYYY-MM-DD] [--run-id <id>]
   cmoa select  --task <dir> [--config <file>] [--run <run-dir>]
+  cmoa verify  --task <dir> --diff <file> [--out <dir>] [--timeout <dur>] [--label <name>] [--config <file>]
   cmoa surfaces [--format text|json]
   cmoa version
 `)

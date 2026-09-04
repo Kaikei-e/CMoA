@@ -260,3 +260,16 @@ func TestRecordIsExhaustive(t *testing.T) {
 		}
 	}
 }
+
+// A task that names its own verifier timeout overrides the configuration's.
+func TestTaskTimeoutOverridesConfig(t *testing.T) {
+	cfg, tk, rd := fixture(t, map[string]cand{"p1": {trace.CandidateOK, goodDiff}})
+	tk.Verify.TimeoutSeconds = 5
+	fr := &fakeRunner{}
+	if _, err := Run(context.Background(), cfg, tk, rd, Options{Runner: fr}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fr.seen) != 1 || fr.seen[0].Timeout != 5*time.Second {
+		t.Fatalf("spec = %+v", fr.seen)
+	}
+}
