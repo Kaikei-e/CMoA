@@ -1,0 +1,11 @@
+#!/bin/sh
+# Fake docdag for tests. Records its argv and answers a fixed corpus.
+echo "$@" >> "${FAKE_DOCDAG_LOG:?}"
+case "$1" in
+  --version) echo "docdag version v0.3.0-test"; exit 0 ;;
+  query)
+    if [ -n "$FAKE_DOCDAG_FAIL" ]; then echo "boom" >&2; exit 1; fi
+    echo '[{"id":"0001","title":"T","status":"accepted","path":"docs/adr/0001-t.md","fields":{}}]'
+    exit 0 ;;
+esac
+echo "unexpected args: $*" >&2; exit 2

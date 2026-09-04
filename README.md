@@ -18,11 +18,27 @@ on uzushio; uzushio depends on it.
 
 ## Status
 
-**Pre-implementation.** No runtime code exists yet. What this repository
-holds today is the architecture decision records under `docs/adr/`, gated
-by DocDag so that a superseded decision cannot keep saying it is in force.
-The first milestone is the coding face alone: N proposers, selection by
-verifier pass, no judge model to calibrate.
+**v0, coding face.** `cmoa propose` asks every configured proposer for a
+unified diff; `cmoa select` applies each diff to its own git worktree,
+runs the task's verifier in a container, and selects the first candidate
+in configured order that passes. There is no judge model, no daemon and no
+dependency outside the Go standard library. What comes next, and in what
+order, is in [docs/roadmap.md](docs/roadmap.md).
+
+```sh
+go build -o bin/cmoa ./cmd/cmoa
+cd examples/task-hello && ./setup.sh
+cmoa propose --task . --config /path/to/cmoa.json     # writes runs/<run-id>/
+cmoa select  --task .                                  # verifies, writes select.json
+cmoa surfaces                                          # the editable surfaces
+```
+
+`cmoa.json` names the proposers (any OpenAI-compatible `/v1/chat/completions`
+endpoint, such as `llama-server`), the DocDag vault the run reads, and the
+verifier's parallelism and timeout. A task is a directory holding
+`task.json`, `instruction.md` and a `compose.yaml` with a `verify` service;
+see `examples/task-hello`. What a run leaves behind is described in
+[docs/trace-schema.md](docs/trace-schema.md).
 
 ## Scope
 
@@ -72,10 +88,16 @@ docdag lint                                     # the rules in docdag.yaml
 ## Install
 
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.3.0
+go install github.com/Kaikei-e/CMoA/cmd/cmoa@latest
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.3.0   # propose reads the vault through it
 ```
 
-This installs `docdag` into `$(go env GOPATH)/bin`. `docdag.yaml` pins the
+CMoA needs Go 1.27, git and Docker Compose at runtime (`select` runs
+`docker compose run`). `make test` runs the unit tests without a model,
+Docker or DocDag; `CMOA_E2E=1 CMOA_CONFIG=... make e2e` runs
+`examples/task-hello` against a live proposer fleet.
+
+`docdag.yaml` pins the
 `adr` preset and the corpus directory; CI downloads the v0.3.0 release
 binary via `Kaikei-e/DocDag@v0.3.0`. Locally, `pre-commit install` runs the
 same checks on Markdown and `docdag.yaml` edits; the hook builds `docdag`

@@ -1,1 +1,6 @@
 docs/internal/
+local/
+/cmoa
+/bin/
+examples/*/repo/
+examples/*/runs/
