@@ -1,8 +1,19 @@
-// Package prompt builds the two messages a proposer receives: a system
-// message stating the output contract (one unified diff, nothing else) and
-// a user message holding the task instruction and the full text of every
-// file the task lists. The choice of files is the task's, never the
-// model's, so two runs of the same task send byte-identical prompts.
+// Package prompt builds the messages a proposer receives, and the two the
+// judge receives.
+//
+// On the coding face a proposer is sent a system message stating the output
+// contract (one unified diff, nothing else) and a user message holding the
+// task instruction and the full text of every file the task lists. The
+// choice of files is the task's, never the model's, so two runs of the same
+// task send byte-identical prompts.
+//
+// On the chat face a proposer is sent one system message — a neutral
+// assistant contract, with the harness appended to it — followed by the
+// task's conversation verbatim. The judge is sent a system message stating
+// its own contract and a user message holding the task, the reference
+// answer and rubric if the task has them, and the two candidate answers
+// inside nonced blocks. The reference and the rubric never reach a
+// proposer: they would tell it the answer.
 //
 // A run may also carry a Harness: the rendered form of the harness edits
 // that are in force. The contract comes first and verbatim — a harness
@@ -16,6 +27,8 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"strings"
 	"text/template"
 
@@ -23,13 +36,31 @@ import (
 	"github.com/Kaikei-e/CMoA/internal/task"
 )
 
-//go:embed system.tmpl user.tmpl
+//go:embed system.tmpl user.tmpl chat-system.tmpl judge-system.tmpl judge-user.tmpl
 var files embed.FS
 
+// templateNames is every template the package renders, in the order
+// Version digests them. Adding one changes prompt_version, which is the
+// point: a run must be able to say which prompts it sent.
+var templateNames = []string{"system.tmpl", "user.tmpl", "chat-system.tmpl", "judge-system.tmpl", "judge-user.tmpl"}
+
 var (
-	systemTmpl = template.Must(template.New("system").Parse(mustRead("system.tmpl")))
-	userTmpl   = template.Must(template.New("user").Parse(mustRead("user.tmpl")))
+	systemTmpl      = template.Must(template.New("system").Parse(mustRead("system.tmpl")))
+	userTmpl        = template.Must(template.New("user").Parse(mustRead("user.tmpl")))
+	chatSystemTmpl  = template.Must(template.New("chat-system").Parse(mustRead("chat-system.tmpl")))
+	judgeSystemTmpl = template.Must(template.New("judge-system").Parse(mustRead("judge-system.tmpl")))
+	judgeUserTmpl   = template.Must(template.New("judge-user").Parse(mustRead("judge-user.tmpl")))
 )
+
+// GenericRubric is what the judge is given when the task names no rubric of
+// its own. It is deliberately about the answer and not about its shape: the
+// three debiasing clauses live in the judge's system contract, and this
+// last line repeats the one a rubric is most often written against.
+const GenericRubric = `- Does the answer do what the last user message asks?
+- Is it correct, and would its claims survive checking?
+- Does it cover what matters and leave out what does not?
+- Is it clear, and in the language the user wrote in?
+- Length, formatting and tone are not quality.`
 
 // Harness is a rendered harness directory as the prompt sees it: the text
 // appended to the system contract, the notes in the order they are read,
@@ -124,12 +155,104 @@ func Build(t *task.Task, h Harness) ([]llm.Message, error) {
 }
 
 // Version is a digest of the templates, written into traces so a later
-// reader can tell which prompt a run used. It says nothing about the
-// harness a run rendered; harness.render in run.json does that.
+// reader can tell which prompt a run used. It covers every template the
+// package holds, so editing any one of them changes the version a run
+// records; it says nothing about the harness a run rendered, which
+// harness.render in run.json does.
 func Version() string {
-	sum := sha256.Sum256([]byte(mustRead("system.tmpl") + "\x00" + mustRead("user.tmpl")))
-	return hex.EncodeToString(sum[:8])
+	h := sha256.New()
+	for i, name := range templateNames {
+		if i > 0 {
+			h.Write([]byte{0})
+		}
+		h.Write([]byte(mustRead(name)))
+	}
+	return hex.EncodeToString(h.Sum(nil)[:8])
 }
+
+// BuildChat renders the messages a chat-face proposer receives: one system
+// message carrying the assistant contract and the harness, then the task's
+// conversation, verbatim and in order. The conversation is the task's, so
+// two runs of the same task send byte-identical prompts.
+func BuildChat(t *task.Task, h Harness) ([]llm.Message, error) {
+	if t.Chat == nil {
+		return nil, errors.New("prompt: BuildChat needs a chat task")
+	}
+	var sys bytes.Buffer
+	if err := chatSystemTmpl.Execute(&sys, struct{ Harness Harness }{h.normalized()}); err != nil {
+		return nil, err
+	}
+	msgs := []llm.Message{{Role: "system", Content: strings.TrimRight(sys.String(), "\n")}}
+	for _, m := range t.Chat.Conversation {
+		msgs = append(msgs, llm.Message{Role: m.Role, Content: m.Content})
+	}
+	return msgs, nil
+}
+
+// JudgeCandidate is one answer as the judge sees it: a positional label and
+// the text, already sanitised by the caller. Which candidate carries which
+// label is not in the prompt — only in the trace.
+type JudgeCandidate struct {
+	Label string
+	Text  string
+}
+
+// JudgeInput is everything the judge's user message is built from.
+type JudgeInput struct {
+	Conversation []task.ConvMessage
+	Reference    string // the task's reference answer, empty when it has none
+	Rubric       string // the task's rubric, empty for GenericRubric
+	Candidates   []JudgeCandidate
+	Nonce        string // 8 hex, per selection
+	AllowTie     bool
+}
+
+// BuildJudge renders the two messages of one judge call. The nonce fences
+// the candidate blocks; escaping any closing sequence inside the text is
+// the caller's job, because a rewrite changes what is judged and has to be
+// recorded where the outcome is.
+func BuildJudge(in JudgeInput) ([]llm.Message, error) {
+	if in.Nonce == "" {
+		return nil, errors.New("prompt: BuildJudge needs a nonce")
+	}
+	if len(in.Candidates) != 2 {
+		return nil, fmt.Errorf("prompt: BuildJudge compares two candidates, got %d", len(in.Candidates))
+	}
+	type conv struct{ Role, Content string }
+	data := struct {
+		Conversation []conv
+		Reference    string
+		Rubric       string
+		Candidates   []JudgeCandidate
+		Nonce        string
+		ChoiceEnum   string
+	}{Reference: trimBlank(in.Reference), Rubric: trimBlank(in.Rubric), Nonce: in.Nonce, ChoiceEnum: `"A" | "B"`}
+	if data.Rubric == "" {
+		data.Rubric = GenericRubric
+	}
+	if in.AllowTie {
+		data.ChoiceEnum = `"A" | "B" | "tie"`
+	}
+	for _, m := range in.Conversation {
+		data.Conversation = append(data.Conversation, conv{Role: m.Role, Content: trimBlank(m.Content)})
+	}
+	for _, c := range in.Candidates {
+		data.Candidates = append(data.Candidates, JudgeCandidate{Label: c.Label, Text: trimBlank(c.Text)})
+	}
+	var sys, user bytes.Buffer
+	if err := judgeSystemTmpl.Execute(&sys, data); err != nil {
+		return nil, err
+	}
+	if err := judgeUserTmpl.Execute(&user, data); err != nil {
+		return nil, err
+	}
+	return []llm.Message{
+		{Role: "system", Content: strings.TrimRight(sys.String(), "\n")},
+		{Role: "user", Content: user.String()},
+	}, nil
+}
+
+func trimBlank(s string) string { return strings.Trim(s, "\n") }
 
 func ensureNewline(s string) string {
 	if s == "" || strings.HasSuffix(s, "\n") {

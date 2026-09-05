@@ -185,7 +185,7 @@ func TestV2Defaults(t *testing.T) {
 
 func TestLoadV2Errors(t *testing.T) {
 	cases := map[string]string{
-		"version":                `{"version":3,"id":"h","repo":"repo","files":["add.go"]}`,
+		"version":                `{"version":4,"id":"h","repo":"repo","files":["add.go"]}`,
 		"verify.kind":            `{"version":2,"id":"h","repo":"repo","files":["add.go"],"verify":{"kind":"exitcode"}}`,
 		"verify.timeout_seconds": `{"version":2,"id":"h","repo":"repo","files":["add.go"],"verify":{"timeout_seconds":-1}}`,
 		"mutants[0].diff":        `{"version":2,"id":"h","repo":"repo","files":["add.go"],"mutants":[{"diff":"../escape.diff"}]}`,

@@ -45,7 +45,7 @@ func TestExplicitZeroTemperatureIsKept(t *testing.T) {
 
 func TestValidationErrors(t *testing.T) {
 	cases := map[string]string{
-		"version":                       `{"version":2,"proposers":[{"id":"a","base_url":"http://h","model":"m"}],"harness":{"vault":"v"}}`,
+		"version":                       `{"version":3,"proposers":[{"id":"a","base_url":"http://h","model":"m"}],"harness":{"vault":"v"}}`,
 		"proposers":                     `{"version":1,"proposers":[],"harness":{"vault":"v"}}`,
 		"proposers[0].id":               `{"version":1,"proposers":[{"id":"Bad_ID","base_url":"http://h","model":"m"}],"harness":{"vault":"v"}}`,
 		"proposers[1].id":               `{"version":1,"proposers":[{"id":"a","base_url":"http://h","model":"m"},{"id":"a","base_url":"http://h","model":"m"}],"harness":{"vault":"v"}}`,

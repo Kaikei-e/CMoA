@@ -9,10 +9,13 @@
 //	prompt/<proposer-id>.json       the exact request sent to each proposer
 //	candidates/<proposer-id>.json   what came back, with a status
 //	candidates/<proposer-id>.raw.txt
-//	candidates/<proposer-id>.diff   the extracted diff, when there is one
-//	verify/<proposer-id>/result.json  written by select
+//	candidates/<proposer-id>.diff   the extracted diff, coding face only
+//	candidates/<proposer-id>.txt    the answer, chat face only
+//	verify/<proposer-id>/result.json  written by select, coding face only
 //	verify/<proposer-id>/stdout.txt
 //	verify/<proposer-id>/stderr.txt
+//	judge/<pair>-<ab|ba>.json       one judge call, chat face only
+//	judge.json                      written once by select or judge
 //	select.json                     written once by select
 //
 // Every JSON file is written atomically (temp file, then rename). run.json
@@ -65,11 +68,27 @@ func ParseRunID(s string) (RunID, error) {
 type CandidateStatus string
 
 const (
-	CandidateOK        CandidateStatus = "ok"         // a diff was extracted
+	CandidateOK        CandidateStatus = "ok"         // a diff was extracted, or an answer arrived
 	CandidateHTTPError CandidateStatus = "http_error" // non-2xx, connection refused, or undecodable body
 	CandidateTimeout   CandidateStatus = "timeout"    // the proposer's own timeout elapsed
 	CandidateMalformed CandidateStatus = "malformed"  // 2xx but the body was not a chat completion
 	CandidateNoDiff    CandidateStatus = "no_diff"    // a completion arrived but held no unified diff
+	CandidateEmpty     CandidateStatus = "empty"      // chat face: a completion arrived with nothing in it
+)
+
+// Face is which half of CMoA a run belongs to; it mirrors task.Face.
+const (
+	FaceCoding = "coding"
+	FaceChat   = "chat"
+)
+
+// CandidatesOrigin says where a run's candidates came from.
+const (
+	// OriginProposers: the configured pool answered. What propose writes.
+	OriginProposers = "proposers"
+	// OriginExternal: the candidates were named on the command line by
+	// `cmoa judge`, and no proposer was asked.
+	OriginExternal = "external"
 )
 
 // VerifyStatus is what select concluded about one candidate.
@@ -126,7 +145,29 @@ const (
 	SelectionSelected       SelectionKind = "selected"
 	SelectionNoCandidate    SelectionKind = "no_candidate"
 	SelectionJudgeTimeout   SelectionKind = "judge_timeout"
+	SelectionJudgeFailed    SelectionKind = "judge_failed"
 	SelectionVerifierFailed SelectionKind = "verifier_failed"
+)
+
+// NoCandidateReason sub-classifies a no_candidate on the chat face. The
+// distribution of these words over a calibration set is itself a measure of
+// the judge, which is why they are recorded rather than folded into one.
+type NoCandidateReason string
+
+const (
+	// ReasonCycle: every pair was decided and the wins run in a circle.
+	ReasonCycle NoCandidateReason = "cycle"
+	// ReasonNoMajority: some pair was decided, but no candidate beat all
+	// the others.
+	ReasonNoMajority NoCandidateReason = "no_majority"
+	// ReasonAllDraws: no pair was decided at all.
+	ReasonAllDraws NoCandidateReason = "all_draws"
+	// ReasonInvalidOutput: the judge never returned usable JSON for a call
+	// the outcome needed, retry included.
+	ReasonInvalidOutput NoCandidateReason = "invalid_output"
+	// ReasonTooFewCandidates: fewer than two answers to compare. A single
+	// answer is not a selection; the caller can still read it.
+	ReasonTooFewCandidates NoCandidateReason = "too_few_candidates"
 )
 
 // Run is run.json.
@@ -136,11 +177,25 @@ type Run struct {
 	CreatedAt     time.Time       `json:"created_at"`
 	CMoAVersion   string          `json:"cmoa_version"`
 	PromptVersion string          `json:"prompt_version"`
+	Face          string          `json:"face"`
 	Task          TaskRef         `json:"task"`
 	Config        json.RawMessage `json:"config"` // effective config, secrets stripped
 	Harness       Harness         `json:"harness"`
 	Proposers     []ProposerRef   `json:"proposers"`
 	Byzantine     Byzantine       `json:"byzantine"`
+	// The chat face only.
+	ConversationSHA256 string              `json:"conversation_sha256,omitempty"`
+	CandidatesOrigin   string              `json:"candidates_origin,omitempty"`
+	ExternalCandidates []ExternalCandidate `json:"external_candidates,omitempty"`
+}
+
+// ExternalCandidate is one answer `cmoa judge` was handed on the command
+// line: which id it was given, which file it was read from, and the digest
+// of the bytes as read, so a caller can pin what was judged.
+type ExternalCandidate struct {
+	ID     string `json:"id"`
+	File   string `json:"file"`
+	SHA256 string `json:"sha256"`
 }
 
 // TaskRef pins the task a run read.
@@ -226,18 +281,39 @@ type Message struct {
 
 // Candidate is candidates/<proposer-id>.json.
 type Candidate struct {
-	ProposerID     string          `json:"proposer_id"`
-	Model          string          `json:"model"`
-	Status         CandidateStatus `json:"status"`
-	Error          string          `json:"error,omitempty"`
-	FinishReason   string          `json:"finish_reason,omitempty"`
-	Usage          Usage           `json:"usage"`
-	Timings        Timings         `json:"timings"`
-	Diff           *DiffStats      `json:"diff,omitempty"` // only when Status == ok
-	RequestSHA256  string          `json:"request_sha256"`
-	ResponseSHA256 string          `json:"response_sha256,omitempty"`
-	StartedAt      time.Time       `json:"started_at"`
-	FinishedAt     time.Time       `json:"finished_at"`
+	ProposerID   string          `json:"proposer_id"`
+	Model        string          `json:"model"`
+	Face         string          `json:"face,omitempty"`
+	Origin       string          `json:"origin,omitempty"` // external, for a candidate cmoa judge was handed
+	Status       CandidateStatus `json:"status"`
+	Error        string          `json:"error,omitempty"`
+	FinishReason string          `json:"finish_reason,omitempty"`
+	Usage        Usage           `json:"usage"`
+	Timings      Timings         `json:"timings"`
+	Diff         *DiffStats      `json:"diff,omitempty"` // coding face, only when Status == ok
+	// The chat face, only when Status == ok.
+	AnswerSHA256   string             `json:"answer_sha256,omitempty"`
+	AnswerBytes    int                `json:"answer_bytes,omitempty"`
+	Metadata       *CandidateMetadata `json:"metadata,omitempty"`
+	RequestSHA256  string             `json:"request_sha256"`
+	ResponseSHA256 string             `json:"response_sha256,omitempty"`
+	StartedAt      time.Time          `json:"started_at"`
+	FinishedAt     time.Time          `json:"finished_at"`
+}
+
+// CandidateMetadata is the style-control accounting Arena-Hard records for
+// every answer. None of it reaches the judge's prompt: it exists so a later
+// analysis can ask whether the judge was buying length and decoration, and
+// that question cannot be answered by numbers nobody wrote down at the
+// time. TokenLen is the server's completion_tokens, or -1 when it reported
+// none.
+type CandidateMetadata struct {
+	TokenLen       int `json:"token_len"`
+	Chars          int `json:"chars"`
+	HeaderCount    int `json:"header_count"`
+	ListCount      int `json:"list_count"`
+	BoldCount      int `json:"bold_count"`
+	CodeFenceCount int `json:"code_fence_count"`
 }
 
 // Usage is the token accounting the server reported (zero when absent).
@@ -303,8 +379,11 @@ type Select struct {
 	Order         []string        `json:"order"` // candidate ids in the order they were considered
 	Selection     SelectionRecord `json:"selection"`
 	AlsoPassed    []string        `json:"also_passed"`
-	MaxParallel   int             `json:"max_parallel"`
-	FinishedAt    time.Time       `json:"finished_at"`
+	// Ranked is the chat face's candidate ids by wins, ties broken by the
+	// order above. It is informational: only the Selection decides.
+	Ranked      []string  `json:"ranked,omitempty"`
+	MaxParallel int       `json:"max_parallel"`
+	FinishedAt  time.Time `json:"finished_at"`
 }
 
 // SelectionRecord is the JSON shape of the sealed Selection type. Only the
@@ -312,10 +391,158 @@ type Select struct {
 type SelectionRecord struct {
 	Kind        SelectionKind `json:"kind"`
 	CandidateID string        `json:"candidate_id,omitempty"` // selected
-	Reason      string        `json:"reason,omitempty"`       // selected
+	Reason      string        `json:"reason,omitempty"`       // selected; the sub-reason for no_candidate
 	Tried       int           `json:"tried,omitempty"`        // no_candidate
 	AfterMS     int64         `json:"after_ms,omitempty"`     // judge_timeout
-	Error       string        `json:"error,omitempty"`        // verifier_failed
+	Error       string        `json:"error,omitempty"`        // verifier_failed, judge_failed
+}
+
+// JudgeReport is judge.json: the whole pairwise protocol for one selection,
+// written once by select or judge on the chat face. It is the record a
+// calibration reads, so everything the judge saw and every quantity that
+// could explain the outcome is in it or in the file it names.
+type JudgeReport struct {
+	SchemaVersion        int                 `json:"schema_version"`
+	RunID                RunID               `json:"run_id"`
+	Judge                JudgeParams         `json:"judge"`
+	Candidates           []string            `json:"candidates"`   // in the order the caller gave them
+	Presentation         Presentation        `json:"presentation"` // how they were shown to the judge
+	Pairs                []JudgePair         `json:"pairs"`
+	Wins                 map[string]int      `json:"wins"`
+	Outcome              JudgeOutcome        `json:"outcome"`
+	Ranked               []string            `json:"ranked"`
+	SwapConsistentPairs  int                 `json:"swap_consistent_pairs"`
+	InvalidOutputRetries int                 `json:"invalid_output_retries"`
+	Sanitized            []Sanitized         `json:"sanitized"`
+	InjectionFlags       map[string][]string `json:"injection_flags"`
+	Usage                Usage               `json:"usage"`
+	LatencyMS            int64               `json:"latency_ms"`
+	FinishedAt           time.Time           `json:"finished_at"`
+}
+
+// JudgeParams is what the judge endpoint was asked with, minus any key.
+type JudgeParams struct {
+	Model         string  `json:"model"`
+	BaseURL       string  `json:"base_url"`
+	Temperature   float64 `json:"temperature"`
+	Seed          *int64  `json:"seed"`
+	MaxTokens     int     `json:"max_tokens"`
+	Grammar       bool    `json:"grammar"`
+	Parallel      int     `json:"parallel"`
+	AllowTie      bool    `json:"allow_tie"`
+	PromptVersion string  `json:"prompt_version"`
+}
+
+// Presentation is how the candidates were shuffled and fenced. Permutation
+// holds indices into Candidates, in the order the judge saw them; without
+// it a re-run cannot be compared with this one.
+type Presentation struct {
+	Permutation []int  `json:"permutation"`
+	Nonce       string `json:"nonce"`
+	SeedSource  string `json:"seed_source"` // run_id, or flag
+}
+
+// JudgePair is one unordered pair of candidates, asked in both orders.
+// Verdict is a candidate id, or "draw": a pair is won only when both orders
+// name the same candidate.
+type JudgePair struct {
+	Pair    []string     `json:"pair"`
+	Orders  []JudgeOrder `json:"orders"`
+	Verdict string       `json:"verdict"`
+}
+
+// VerdictDraw is the Verdict of a pair no candidate won.
+const VerdictDraw = "draw"
+
+// JudgeOrder is one call: the pair in one order, and what came back.
+type JudgeOrder struct {
+	First           string          `json:"first"`
+	Second          string          `json:"second"`
+	Choice          string          `json:"choice,omitempty"` // A, B or tie, as the judge answered
+	ChoiceCandidate string          `json:"choice_candidate,omitempty"`
+	Status          JudgeCallStatus `json:"status"`
+	Error           string          `json:"error,omitempty"`
+	Retries         int             `json:"retries"`
+	LatencyMS       int64           `json:"latency_ms"`
+	RequestSHA256   string          `json:"request_sha256,omitempty"`
+	ResponseSHA256  string          `json:"response_sha256,omitempty"`
+	File            string          `json:"file"` // judge/<pair>-<ab|ba>.json
+}
+
+// JudgeCallStatus is what one judge call ended as.
+type JudgeCallStatus string
+
+const (
+	JudgeCallOK            JudgeCallStatus = "ok"             // valid JSON with a choice in the enum
+	JudgeCallInvalidOutput JudgeCallStatus = "invalid_output" // still unparsable after the one retry
+	JudgeCallTimeout       JudgeCallStatus = "timeout"        // the judge's own timeout elapsed
+	JudgeCallError         JudgeCallStatus = "error"          // HTTP or decode failure
+)
+
+// The three answers the judge may give inside one call. The labels are
+// positional: which candidate A is is only in the trace.
+const (
+	ChoiceA   = "A"
+	ChoiceB   = "B"
+	ChoiceTie = "tie"
+)
+
+// JudgeOutcome is judge.json's verdict, in the same vocabulary select.json
+// uses.
+type JudgeOutcome struct {
+	Kind        SelectionKind `json:"kind"`
+	CandidateID string        `json:"candidate_id,omitempty"`
+	Reason      string        `json:"reason"`
+}
+
+// Sanitized is one rewrite the judge's fencing made to a candidate's text.
+// A rewrite changes what is judged, so it is recorded rather than done
+// quietly.
+type Sanitized struct {
+	Candidate string `json:"candidate"`
+	What      string `json:"what"`
+	Count     int    `json:"count"`
+}
+
+// JudgeCall is judge/<pair>-<ab|ba>.json: everything one call sent and
+// everything that came back, including the attempt that failed to parse.
+type JudgeCall struct {
+	SchemaVersion int             `json:"schema_version"`
+	RunID         RunID           `json:"run_id"`
+	Pair          int             `json:"pair"`
+	Order         string          `json:"order"` // ab or ba
+	First         string          `json:"first"`
+	Second        string          `json:"second"`
+	Model         string          `json:"model"`
+	BaseURL       string          `json:"base_url"`
+	Attempts      []JudgeAttempt  `json:"attempts"`
+	Status        JudgeCallStatus `json:"status"`
+	Choice        string          `json:"choice,omitempty"`
+	LatencyMS     int64           `json:"latency_ms"`
+}
+
+// JudgeAttempt is one HTTP round trip of a judge call. The second attempt
+// exists only when the first did not parse.
+type JudgeAttempt struct {
+	Messages       []Message       `json:"messages"`
+	Request        json.RawMessage `json:"request"`  // the full body, minus Authorization
+	Response       json.RawMessage `json:"response"` // the full body as it came back
+	RequestSHA256  string          `json:"request_sha256,omitempty"`
+	ResponseSHA256 string          `json:"response_sha256,omitempty"`
+	Content        string          `json:"content,omitempty"` // the completion text, reasoning stripped
+	Parsed         *JudgeAnswer    `json:"parsed,omitempty"`
+	ParseError     string          `json:"parse_error,omitempty"`
+	Error          string          `json:"error,omitempty"`
+	Usage          Usage           `json:"usage"`
+	LatencyMS      int64           `json:"latency_ms"`
+}
+
+// JudgeAnswer is the object the judge is asked to return, in the key order
+// the grammar fixes: the reason is written before the choice, so the choice
+// cannot be reached without passing through it.
+type JudgeAnswer struct {
+	Reason string `json:"reason"`
+	Choice string `json:"choice"`
 }
 
 // Dir is the run directory. All paths are derived from it, so nothing else
@@ -393,6 +620,25 @@ func (d Dir) CandidateRaw(id string) string {
 func (d Dir) CandidateDiff(id string) string {
 	return filepath.Join(string(d), "candidates", id+".diff")
 }
+func (d Dir) CandidateAnswer(id string) string {
+	return filepath.Join(string(d), "candidates", id+".txt")
+}
+func (d Dir) JudgeDir() string  { return filepath.Join(string(d), "judge") }
+func (d Dir) JudgeFile() string { return filepath.Join(string(d), "judge.json") }
+
+// JudgeCallFile names one call of the pairwise protocol. The name is the
+// pair index and the order, so the six files of a three-candidate selection
+// sort into the order they were built in.
+func (d Dir) JudgeCallFile(pair int, order string) string {
+	return filepath.Join(d.JudgeDir(), fmt.Sprintf("%d-%s.json", pair, order))
+}
+
+// JudgeCallName is JudgeCallFile relative to the run directory, which is
+// how judge.json refers to it.
+func JudgeCallName(pair int, order string) string {
+	return fmt.Sprintf("judge/%d-%s.json", pair, order)
+}
+
 func (d Dir) VerifyDir(id string) string    { return filepath.Join(string(d), "verify", id) }
 func (d Dir) VerifyResult(id string) string { return filepath.Join(d.VerifyDir(id), "result.json") }
 func (d Dir) VerifyStdout(id string) string { return filepath.Join(d.VerifyDir(id), "stdout.txt") }
@@ -419,6 +665,41 @@ func (d Dir) WriteCandidate(c *Candidate, raw []byte, diff string) error {
 		}
 	}
 	return writeJSON(d.CandidateFile(c.ProposerID), c)
+}
+
+// WriteChatCandidate writes candidates/<id>.json, the raw response, and the
+// answer as candidates/<id>.txt. An empty answer writes no .txt file, the
+// way an empty diff writes no .diff.
+func (d Dir) WriteChatCandidate(c *Candidate, raw []byte, answer string) error {
+	if err := writeFileAtomic(d.CandidateRaw(c.ProposerID), raw); err != nil {
+		return err
+	}
+	if answer != "" {
+		if err := writeFileAtomic(d.CandidateAnswer(c.ProposerID), []byte(answer)); err != nil {
+			return err
+		}
+	}
+	return writeJSON(d.CandidateFile(c.ProposerID), c)
+}
+
+// ReadCandidateAnswer reads candidates/<id>.txt.
+func (d Dir) ReadCandidateAnswer(id string) (string, error) {
+	b, err := os.ReadFile(d.CandidateAnswer(id))
+	return string(b), err
+}
+
+// WriteJudgeCall writes judge/<pair>-<order>.json.
+func (d Dir) WriteJudgeCall(c *JudgeCall) error {
+	return writeJSON(d.JudgeCallFile(c.Pair, c.Order), c)
+}
+
+// WriteJudge writes judge.json once.
+func (d Dir) WriteJudge(r *JudgeReport) error { return writeJSONOnce(d.JudgeFile(), r) }
+
+// ReadJudge reads judge.json.
+func (d Dir) ReadJudge() (*JudgeReport, error) {
+	var r JudgeReport
+	return &r, readJSON(d.JudgeFile(), &r)
 }
 
 // WriteVerify writes verify/<id>/{result.json,stdout.txt,stderr.txt}.
