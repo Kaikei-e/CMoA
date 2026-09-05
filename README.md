@@ -125,13 +125,37 @@ above decides whether to send the question to a person or drop it. The
 distribution of the sub-reasons over a calibration set is itself a measure
 of the judge.
 
-The judge is asked blind. The presentation order is a permutation seeded
-from the run id; the candidates are labelled `A` and `B` inside a call and
-mapped back only in the trace. Candidate text is fenced with a per-selection
-nonce, anything resembling the closing tag is escaped, and injection-shaped
-phrases are flagged — **recorded, never acted on**: silently dropping a
-flagged candidate would be a second, unmeasured judge. Everything the judge
-saw is on disk, in `judge/<pair>-<ab|ba>.json` and `judge.json`.
+`all_draws` is a coarse union — a judge that abstained, one that
+contradicted itself under swap, and one that was never reached all land in
+it — so every pair also records **why** it drew: `tie`, `disagree`,
+`invalid` or `unmeasured`, counted in `judge.json` as `draw_reasons`. Three
+different findings about a judge reported under one word is the conflation
+an agreement metric must not make, so the split is kept where a calibration
+can read it.
+
+A pair nobody could answer does not throw away a winner it could not have
+unseated: if one candidate has already beaten every other, a timeout in the
+pair between two losers leaves the selection standing and is recorded as
+`unmeasured`. Only when the missing answers could still decide the outcome
+does it become `judge_timeout` or `judge_failed`.
+
+The judge is asked blind. The candidates are labelled `A` and `B` inside a
+call and mapped back only in the trace. Candidate text is fenced with a
+nonce; invisible characters (C0 controls, zero-width runes) are dropped
+first and anything still resembling the closing tag is escaped after, so a
+control character hidden inside the tag cannot survive the escape and then
+be tidied into a working one. Injection-shaped phrases are flagged —
+**recorded, never acted on**: silently dropping a flagged candidate would be
+a second, unmeasured judge. Everything the judge saw is on disk, in
+`judge/<pair>-<ab|ba>.json` and `judge.json`.
+
+There is no presentation permutation: both orders of every pair are always
+asked, so shuffling the candidates cannot change one byte the judge reads.
+The nonce is what a re-run varies, and it is derived from a seed — `--seed`,
+or the run id — rather than drawn afresh. That makes `--seed` a real
+perturbation of the prompt, the same question in different irrelevant bytes
+whose answer ought not to change, and it makes a selection reproducible from
+its own trace.
 
 `cmoa judge` performs the same protocol over answers CMoA did not produce,
 which is what a calibration needs:
@@ -140,10 +164,11 @@ which is what a calibration needs:
 cmoa judge --task <chat task> --candidate c1.txt --candidate c2.txt --candidate c3.txt --seed 7
 ```
 
-`--seed` changes only the presentation permutation and the nonce;
-`--judge-seed` changes the judge's own sampling seed. Both `select` and
-`judge` print one JSON object on the chat face and exit 0 whatever the
-outcome.
+`--seed` changes only the nonce; `--judge-seed` changes the judge's own
+sampling seed. Both `select` and `judge` print one JSON object on the chat
+face and exit 0 whatever the outcome, and both refuse a run that has
+already been judged *before* making a call, so an interrupted attempt
+cannot be made to spend the fleet twice.
 
 `cmoa serve` answers `GET /v1/models` and `POST /v1/chat/completions`. Every
 request becomes a task directory and a full run trace under `serve.runs_dir`,

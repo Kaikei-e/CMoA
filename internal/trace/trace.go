@@ -411,15 +411,18 @@ type SelectionRecord struct {
 // calibration reads, so everything the judge saw and every quantity that
 // could explain the outcome is in it or in the file it names.
 type JudgeReport struct {
-	SchemaVersion        int                 `json:"schema_version"`
-	RunID                RunID               `json:"run_id"`
-	Judge                JudgeParams         `json:"judge"`
-	Candidates           []string            `json:"candidates"`   // in the order the caller gave them
-	Presentation         Presentation        `json:"presentation"` // how they were shown to the judge
-	Pairs                []JudgePair         `json:"pairs"`
-	Wins                 map[string]int      `json:"wins"`
-	Outcome              JudgeOutcome        `json:"outcome"`
-	Ranked               []string            `json:"ranked"`
+	SchemaVersion int            `json:"schema_version"`
+	RunID         RunID          `json:"run_id"`
+	Judge         JudgeParams    `json:"judge"`
+	Candidates    []string       `json:"candidates"`   // in the order the caller gave them
+	Presentation  Presentation   `json:"presentation"` // how they were shown to the judge
+	Pairs         []JudgePair    `json:"pairs"`
+	Wins          map[string]int `json:"wins"`
+	Outcome       JudgeOutcome   `json:"outcome"`
+	Ranked        []string       `json:"ranked"`
+	// DrawReasons counts the pairs by DrawReason. A decided pair is not in
+	// it, so the values sum to the number of draws.
+	DrawReasons          map[DrawReason]int  `json:"draw_reasons"`
 	SwapConsistentPairs  int                 `json:"swap_consistent_pairs"`
 	InvalidOutputRetries int                 `json:"invalid_output_retries"`
 	Sanitized            []Sanitized         `json:"sanitized"`
@@ -447,26 +450,54 @@ type JudgeParams struct {
 	ExtraBody map[string]json.RawMessage `json:"extra_body,omitempty"`
 }
 
-// Presentation is how the candidates were shuffled and fenced. Permutation
-// holds indices into Candidates, in the order the judge saw them; without
-// it a re-run cannot be compared with this one.
+// Presentation is how the candidates were fenced, and where that came
+// from. There is no permutation: every pair is asked in both orders, so
+// shuffling the candidates only renumbers the pairs and cannot change one
+// byte the judge reads. What can change is the nonce, and it is derived
+// from Seed — so a re-run under another seed is a real perturbation of the
+// prompt, an irrelevant token the answer ought to be invariant to, rather
+// than the same six requests sent twice.
 type Presentation struct {
-	Permutation []int  `json:"permutation"`
-	Nonce       string `json:"nonce"`
-	SeedSource  string `json:"seed_source"` // run_id, or flag
+	Seed       int64  `json:"seed"`
+	SeedSource string `json:"seed_source"` // run_id, or flag
+	Nonce      string `json:"nonce"`
 }
 
 // JudgePair is one unordered pair of candidates, asked in both orders.
 // Verdict is a candidate id, or "draw": a pair is won only when both orders
-// name the same candidate.
+// name the same candidate. DrawReason says why a draw was a draw, which the
+// outcome's own vocabulary cannot: `all_draws` is a union of four different
+// findings, and this field is where the split lives.
 type JudgePair struct {
-	Pair    []string     `json:"pair"`
-	Orders  []JudgeOrder `json:"orders"`
-	Verdict string       `json:"verdict"`
+	Pair       []string     `json:"pair"`
+	Orders     []JudgeOrder `json:"orders"`
+	Verdict    string       `json:"verdict"`
+	DrawReason DrawReason   `json:"draw_reason,omitempty"`
 }
 
 // VerdictDraw is the Verdict of a pair no candidate won.
 const VerdictDraw = "draw"
+
+// DrawReason is why one pair produced no winner. A judge that abstained, a
+// judge that contradicted itself under swap, a judge that could not hold a
+// format and a judge that never answered are four different findings about
+// the judge, and folding them into one word is exactly the conflation an
+// agreement metric must not make.
+type DrawReason string
+
+const (
+	// DrawTie: both orders answered, and at least one called it a tie.
+	DrawTie DrawReason = "tie"
+	// DrawDisagree: both orders named a candidate, and not the same one.
+	// The position spoke, not the quality.
+	DrawDisagree DrawReason = "disagree"
+	// DrawInvalid: an order never produced usable JSON, retry included.
+	DrawInvalid DrawReason = "invalid"
+	// DrawUnmeasured: an order timed out or could not be sent, so the pair
+	// was never judged at all — which is not the same as judged
+	// inconclusive.
+	DrawUnmeasured DrawReason = "unmeasured"
+)
 
 // JudgeOrder is one call: the pair in one order, and what came back.
 type JudgeOrder struct {

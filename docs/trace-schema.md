@@ -318,14 +318,71 @@ in is the Condorcet winner and is selected. Anything else is
 | `invalid_output` | the judge never returned usable JSON for a call the outcome needed, retry included |
 | `too_few_candidates` | fewer than two answers to compare |
 
+**`all_draws` is a union**, and a deliberately coarse one: a judge that
+abstained on every pair, a judge that contradicted itself under swap on
+every pair, and a judge that was never reached all land in it. Those are
+three different findings about the judge, and reporting them under one word
+is precisely the conflation an agreement metric must not make — so the
+split lives one level down, in `pairs[].draw_reason`:
+
+| `draw_reason` | when |
+| --- | --- |
+| `tie` | both orders answered and at least one called it a tie |
+| `disagree` | both orders named a candidate, and not the same one — the position spoke, not the quality |
+| `invalid` | an order never produced usable JSON, retry included |
+| `unmeasured` | an order timed out or could not be sent; the pair was never judged at all |
+
+A decided pair carries no `draw_reason`. `judge.json`'s `draw_reasons`
+counts the draws by that field, so the values sum to the number of draws
+and a calibration can report each treatment by name rather than folding
+them together.
+
 There is no re-ask beyond one retry for malformed JSON, and no
 deterministic fallback. "Take the first" or "take the shorter" would
 reinstate as a rule exactly the position and length biases the order swap
 exists to detect.
 
-The presentation order is a permutation seeded from the run id (or from
-`--seed`), recorded in `judge.json`. The candidates are called `A` and `B`
-inside a call; which candidate is which is only in the trace.
+A pair that was never answered — a timeout, or an endpoint that could not
+be reached — does **not** discard a winner it could not have unseated. If
+one candidate has already beaten every other, no answer to the pair between
+two losers can change that, and the outcome is `selected` with the failed
+pair recorded as `draw_reason: unmeasured`. The outcome becomes
+`judge_timeout` or `judge_failed` only when the missing answers could still
+decide it: when some candidate could still win every pair it appears in if
+each unanswered pair went its way. A timeout outranks a transport error,
+because a timeout is the one a caller retries.
+
+The candidates are called `A` and `B` inside a call; which candidate is
+which is only in the trace.
+
+### the presentation seed and the nonce
+
+There is **no presentation permutation**. Both orders of every pair are
+always asked, so shuffling the candidates would only renumber the pairs and
+swap which order is filed as `-ab`; it cannot change one byte the judge
+reads. The pairs are enumerated in the caller's own order.
+
+What a re-run can vary is the **nonce**, and it is derived from a seed
+rather than drawn from `crypto/rand`:
+
+```json
+"presentation": {"seed": 7, "seed_source": "flag", "nonce": "7f3a91c4"}
+```
+
+`seed_source` is `flag` when `--seed` was given and `run_id` otherwise, in
+which case the seed is derived from the run id (which is itself 8 hex from
+`crypto/rand`). The nonce is 8 hex from a PRNG seeded with that value.
+
+This makes `--seed` a real metamorphic perturbation: the same question in
+different irrelevant bytes, whose answer ought not to change. A judge whose
+verdict moves when only the fence label moved is reading the fence. It also
+makes a selection reproducible from its own trace, which a `crypto/rand`
+nonce could not be. The nonce is not a secret — it is recorded in
+`judge.json` — and its fencing job only needs freshness per selection, not
+unpredictability.
+
+`--judge-seed` is a different knob and moves the judge's own sampling seed;
+`--seed` never touches it.
 
 ### judge.json
 
@@ -337,7 +394,7 @@ inside a call; which candidate is which is only in the trace.
             "output_format": "json_schema", "parallel": 3, "allow_tie": true, "prompt_version": "…",
             "extra_body": {"chat_template_kwargs": {"reasoning_effort": "low"}}},
   "candidates": ["p1", "p2", "p3"],
-  "presentation": {"permutation": [2, 0, 1], "nonce": "7f3a91c4", "seed_source": "run_id"},
+  "presentation": {"seed": 7, "seed_source": "flag", "nonce": "7f3a91c4"},
   "pairs": [
     {"pair": ["p1", "p2"],
      "orders": [
@@ -349,11 +406,13 @@ inside a call; which candidate is which is only in the trace.
         "file": "judge/0-ba.json"}
      ],
      "verdict": "p1"
-    }
+    },
+    {"pair": ["p2", "p3"], "orders": [ … ], "verdict": "draw", "draw_reason": "tie"}
   ],
   "wins": {"p1": 2, "p2": 0, "p3": 1},
   "outcome": {"kind": "selected", "candidate_id": "p1", "reason": "condorcet winner, 2 of 3 pairs agreed under both orders"},
   "ranked": ["p1", "p3", "p2"],
+  "draw_reasons": {"tie": 1},
   "swap_consistent_pairs": 3,
   "invalid_output_retries": 1,
   "sanitized": [{"candidate": "p2", "what": "closing-tag-like sequence escaped", "count": 1}],
@@ -368,11 +427,13 @@ An order's `latency_ms` is the wall clock of its call, both attempts
 included when the first did not parse; each attempt's own share is in the
 call file.
 
-`verdict` is a candidate id or `draw`. An order's `status` is `ok`,
-`invalid_output` (still unparsable after the one retry), `timeout` or
-`error` (HTTP or decode failure). One `timeout` makes the whole outcome
-`judge_timeout`; one `error` makes it `judge_failed`. Neither says anything
-about any candidate: the question was never put.
+`verdict` is a candidate id or `draw`, and a draw carries a `draw_reason`.
+An order's `status` is `ok`, `invalid_output` (still unparsable after the
+one retry), `timeout` or `error` (HTTP or decode failure). A `timeout` or
+an `error` escalates the whole outcome to `judge_timeout` or `judge_failed`
+**only if the pair it broke could still have decided the selection** (see
+above); either way it says nothing about any candidate, because the
+question was never put.
 
 `swap_consistent_pairs` counts pairs whose two orders named the **same
 candidate** — including two ties. Choosing `A` in both orders is not
@@ -380,9 +441,20 @@ agreement; it is the position speaking.
 
 `sanitized` is what the fencing rewrote before the judge saw it. A rewrite
 changes what is judged, so a silent one would make an outcome
-unexplainable. Two rewrites exist: a closing-tag-like sequence is escaped
-(`</candidate` becomes `<\/candidate`), and the C0 control characters other
-than tab and newline are dropped.
+unexplainable — and a trace that claims a defence it did not apply is worse
+than one that claims nothing. Three rewrites exist, applied in this order:
+
+1. `control characters dropped` — the C0 characters other than tab and
+   newline, and DEL;
+2. `zero-width characters dropped` — U+200B, U+200C, U+200D, U+2060, U+FEFF;
+3. `closing-tag-like sequence escaped` — anything matching
+   `<\s*/\s*candidate`, case-insensitively, has its opening angle bracket
+   escaped (`</candidate` becomes `<\/candidate`).
+
+The invisible characters go **first** on purpose. Escaping first let
+`</\rcandidate` and `</candi<U+200B>date` slip past the pattern and then be
+reassembled into a working closing tag by the very pass that was supposed
+to clean up after it.
 
 `injection_flags` lists the injection-shaped phrases a candidate's answer
 held. They are **recorded and never acted on**: silently discarding a
@@ -426,7 +498,11 @@ and `response_format` for that reason.
 Parsing takes the **last** balanced `{…}` in the completion, ignoring
 braces inside JSON strings, and decodes it with unknown fields refused. A
 model that reasons in prose before answering leaves earlier braces behind,
-and the answer is the one it finished with.
+and the answer is the one it finished with. **Both keys are required**: an
+object carrying only a `choice` is the format bypassing the reasoning the
+key order exists to force, and it is `invalid_output`. `allow_tie` comes
+from the task and from nowhere else — never from the rendered prompt, which
+holds the candidate text.
 
 ### cmoa judge
 
@@ -434,8 +510,14 @@ and the answer is the one it finished with.
 answers produced somewhere else and performs the same protocol with no
 proposer call. The candidates are `c1..cN` in the order the flags were
 given; `run.json` records `candidates_origin: "external"` and each file's
-digest. `--seed` changes the presentation permutation and the nonce, never
-the judge's sampling seed — `--judge-seed` does that.
+digest. `--seed` changes the nonce and nothing else, never the judge's
+sampling seed — `--judge-seed` does that.
+
+Both `select` and `judge` refuse a run that already has `judge.json` or
+`select.json` **before** making a call, so an interrupted attempt cannot be
+made to spend the fleet a second time and then fail at the write. Call
+files an abandoned attempt left behind, with no `judge.json` beside them,
+are cleared with a line saying so.
 
 On the chat face both `cmoa select` and `cmoa judge` print one JSON object
 on stdout:
@@ -474,7 +556,7 @@ A selection that did not happen is an error, not a 200 with an apology:
 
 | status | `error.type` | when |
 | --- | --- | --- |
-| 400 | `invalid_request_error` | the body, or the messages, did not validate |
+| 400 | `invalid_request_error` | the body did not parse, the messages did not validate, or the conversation is over `max_context_bytes` |
 | 404 | `invalid_request_error` | `model` is not `serve.pool_name` |
 | 502 | `no_candidate` | `error.code` is the sub-reason, `error.param` the run id |
 | 502 | `judge_failed` | the judge could not be asked |
