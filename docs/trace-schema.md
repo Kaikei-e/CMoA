@@ -333,7 +333,8 @@ inside a call; which candidate is which is only in the trace.
   "schema_version": 1,
   "run_id": "20260905T120000Z-abcdef01",
   "judge": {"model": "…", "base_url": "…", "temperature": 0, "seed": null, "max_tokens": 512,
-            "output_format": "json_schema", "parallel": 3, "allow_tie": true, "prompt_version": "…"},
+            "output_format": "json_schema", "parallel": 3, "allow_tie": true, "prompt_version": "…",
+            "extra_body": {"chat_template_kwargs": {"reasoning_effort": "low"}}},
   "candidates": ["p1", "p2", "p3"],
   "presentation": {"permutation": [2, 0, 1], "nonce": "7f3a91c4", "seed_source": "run_id"},
   "pairs": [

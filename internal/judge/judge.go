@@ -95,6 +95,7 @@ func (j *Judge) Run(ctx context.Context, in Input) (*trace.JudgeReport, error) {
 			Model: j.Cfg.Model, BaseURL: j.Cfg.BaseURL, Temperature: *j.Cfg.Temperature,
 			Seed: j.Cfg.Seed, MaxTokens: j.Cfg.MaxTokens, OutputFormat: string(j.Cfg.OutputFormat),
 			Parallel: j.Cfg.Parallel, AllowTie: in.AllowTie, PromptVersion: prompt.Version(),
+			ExtraBody: j.Cfg.ExtraBody,
 		},
 		Candidates:     []string{},
 		Wins:           map[string]int{},

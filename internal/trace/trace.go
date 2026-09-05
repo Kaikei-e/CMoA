@@ -431,6 +431,11 @@ type JudgeParams struct {
 	Parallel      int     `json:"parallel"`
 	AllowTie      bool    `json:"allow_tie"`
 	PromptVersion string  `json:"prompt_version"`
+	// ExtraBody is the server-specific part of the request as it was
+	// configured — a reasoning effort, say. It is in every call file too;
+	// recording it here means the whole judge configuration can be read
+	// out of one document.
+	ExtraBody map[string]json.RawMessage `json:"extra_body,omitempty"`
 }
 
 // Presentation is how the candidates were shuffled and fenced. Permutation
