@@ -380,8 +380,8 @@ var (
 	codeFenceLine = regexp.MustCompile("(?m)^[ \t]*(?:```|~~~)")
 )
 
-// AnswerMetadata is the style accounting Arena-Hard records for every
-// answer: how long it is and how decorated. None of it reaches the judge —
+// AnswerMetadata is the style accounting a preference harness records for
+// every answer: how long it is and how decorated. None of it reaches the judge —
 // it exists so a later analysis can ask whether the judge was buying length
 // and formatting, and that question cannot be answered by numbers nobody
 // wrote down at the time. tokens is the server's completion_tokens; -1 is

@@ -576,9 +576,9 @@ func Aggregate(rep *trace.JudgeReport) {
 		if a.Status == trace.JudgeCallInvalidOutput || b.Status == trace.JudgeCallInvalidOutput {
 			invalid = true
 		}
-		// MT-Bench's conservative rule: a win needs both orders, and any
-		// tie or disagreement is a draw. A pair the swap did not survive is
-		// not evidence, and treating it as one is how a coin flip becomes a
+		// The conservative rule: a win needs both orders, and any tie or
+		// disagreement is a draw. A pair the swap did not survive is not
+		// evidence, and treating it as one is how a coin flip becomes a
 		// decision.
 		// Consistency is about the candidate, not the label: choosing A in
 		// one order and B in the other is the same answer twice, and

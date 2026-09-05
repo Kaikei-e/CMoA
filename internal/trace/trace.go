@@ -301,8 +301,8 @@ type Candidate struct {
 	FinishedAt     time.Time          `json:"finished_at"`
 }
 
-// CandidateMetadata is the style-control accounting Arena-Hard records for
-// every answer. None of it reaches the judge's prompt: it exists so a later
+// CandidateMetadata is the style-control accounting a preference harness
+// records for every answer. None of it reaches the judge's prompt: it exists so a later
 // analysis can ask whether the judge was buying length and decoration, and
 // that question cannot be answered by numbers nobody wrote down at the
 // time. TokenLen is the server's completion_tokens, or -1 when it reported
