@@ -1,0 +1,5 @@
+[
+  {"role": "user", "content": "In Go, what is the difference between a nil slice and an empty slice?"},
+  {"role": "assistant", "content": "A nil slice has no backing array; an empty slice has one, of length zero."},
+  {"role": "user", "content": "Does that difference ever change what my program does? Give one concrete case."}
+]

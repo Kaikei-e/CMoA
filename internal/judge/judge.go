@@ -580,7 +580,10 @@ func Aggregate(rep *trace.JudgeReport) {
 		// tie or disagreement is a draw. A pair the swap did not survive is
 		// not evidence, and treating it as one is how a coin flip becomes a
 		// decision.
-		if a.Status == trace.JudgeCallOK && b.Status == trace.JudgeCallOK && a.Choice == b.Choice {
+		// Consistency is about the candidate, not the label: choosing A in
+		// one order and B in the other is the same answer twice, and
+		// choosing A in both is the position speaking.
+		if a.Status == trace.JudgeCallOK && b.Status == trace.JudgeCallOK && a.ChoiceCandidate == b.ChoiceCandidate {
 			rep.SwapConsistentPairs++
 		}
 		if a.Status != trace.JudgeCallOK || b.Status != trace.JudgeCallOK {
