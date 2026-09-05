@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/Kaikei-e/CMoA/internal/config"
@@ -49,8 +50,14 @@ func RunChat(ctx context.Context, cfg *config.Config, t *task.Task, dir trace.Di
 	if cfg.Judge == nil {
 		return nil, ErrNoJudge
 	}
-	if _, err := os.Stat(dir.SelectFile()); err == nil {
-		return nil, fmt.Errorf("selection: %s already has select.json; a run is selected once", dir)
+	// Both write-once files are checked before a single judge call is made.
+	// judge.json lands first, so guarding only on select.json would let an
+	// interrupted run pay for the whole protocol a second time and then die
+	// at the write.
+	for _, f := range []string{dir.JudgeFile(), dir.SelectFile()} {
+		if _, err := os.Stat(f); err == nil {
+			return nil, fmt.Errorf("selection: %s already has %s; a run is selected once", dir, filepath.Base(f))
+		}
 	}
 	run, err := dir.ReadRun()
 	if err != nil {

@@ -393,3 +393,40 @@ func TestNewRefusesAnUnservableConfig(t *testing.T) {
 		t.Error("a config with no judge cannot serve the chat face")
 	}
 }
+
+// A conversation the task would refuse is the caller's mistake: 400, not
+// 500. A 500 tells a client to retry a request that can never succeed, and
+// the rejected request must not leave a task directory behind either.
+func TestOversizedConversationIs400(t *testing.T) {
+	h, runs := server(t, &fleet{t: t, answer: "a", other: "b", wants: "a"})
+	body, err := json.Marshal(map[string]any{
+		"model":    "cmoa",
+		"messages": []map[string]string{{"role": "user", "content": strings.Repeat("x", 70000)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := post(t, h, string(body))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("%d: %s", w.Code, w.Body)
+	}
+	var got struct {
+		Error struct{ Message, Type, Param string }
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Error.Type != "invalid_request_error" || got.Error.Param != "messages" {
+		t.Errorf("%+v", got.Error)
+	}
+	if !strings.Contains(got.Error.Message, "max_context_bytes") {
+		t.Errorf("the message must name the budget: %q", got.Error.Message)
+	}
+	entries, err := os.ReadDir(runs)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("a rejected request left %d task directories behind", len(entries))
+	}
+}

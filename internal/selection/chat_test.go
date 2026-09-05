@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -224,5 +225,35 @@ func TestRecordAndFromJudge(t *testing.T) {
 		if got := FromJudge(&trace.JudgeReport{Outcome: tc.out}, 3); fmt.Sprintf("%#v", got) != fmt.Sprintf("%#v", tc.want) {
 			t.Errorf("%+v: got %#v, want %#v", tc.out, got, tc.want)
 		}
+	}
+}
+
+// A run whose judge.json is already there is refused before a single judge
+// call. judge.json is written before select.json, so guarding only on
+// select.json let an interrupted run pay for the whole protocol again and
+// then die at the write, leaving it unselectable and the spend wasted.
+func TestRunChatRefusesAnAlreadyJudgedRun(t *testing.T) {
+	tk, dir := chatRun(t, map[string]string{"a": "alpha answer", "b": "beta answer"})
+	var calls atomic.Int32
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"content": `{"reason":"r","choice":"A"}`}}},
+		})
+	}))
+	t.Cleanup(s.Close)
+	cfg, err := config.Parse([]byte(`{"version":2,"proposers":[{"id":"x","base_url":"http://127.0.0.1:1","model":"m"}],
+	  "harness":{"vault":"v"},"judge":{"base_url":"` + s.URL + `/v1","model":"j"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.WriteJudge(&trace.JudgeReport{SchemaVersion: trace.SchemaVersion, RunID: dir.ID()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RunChat(t.Context(), cfg, tk, dir, ChatOptions{}); err == nil {
+		t.Fatal("a run with judge.json must be refused")
+	}
+	if n := calls.Load(); n != 0 {
+		t.Errorf("the refused run spent %d judge calls", n)
 	}
 }

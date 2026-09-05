@@ -186,6 +186,17 @@ func (s *Server) completions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, apiError{Message: err.Error(), Type: "invalid_request_error", Param: "messages"})
 		return
 	}
+	// Checked here rather than left to task.Load, so a conversation nobody
+	// can answer does not first leave a task directory behind: every
+	// rejected request would otherwise write up to max_body_bytes under
+	// runs_dir.
+	if n := conversationBytes(req.Messages); n > task.DefaultMaxContextBytes {
+		writeError(w, http.StatusBadRequest, apiError{
+			Message: fmt.Sprintf("the conversation totals %d bytes, over max_context_bytes %d", n, task.DefaultMaxContextBytes),
+			Type:    "invalid_request_error", Param: "messages",
+		})
+		return
+	}
 
 	// One selection at a time by default: the proposers can be asked in
 	// parallel by the fleet, but a second judge in flight halves the one
@@ -201,6 +212,13 @@ func (s *Server) completions(w http.ResponseWriter, r *http.Request) {
 	out, err := s.answer(r.Context(), req)
 	if err != nil {
 		s.opt.Log("error: %v", err)
+		// A conversation the task refuses is the caller's mistake, not the
+		// server's: it must read as 400, or a client retries a request that
+		// can never succeed.
+		if _, ok := errors.AsType[*task.ValidationError](err); ok || errors.Is(err, propose.ErrContextBudget) {
+			writeError(w, http.StatusBadRequest, apiError{Message: err.Error(), Type: "invalid_request_error", Param: "messages"})
+			return
+		}
 		writeError(w, http.StatusInternalServerError, apiError{Message: err.Error(), Type: "internal_error"})
 		return
 	}
@@ -213,6 +231,16 @@ func (s *Server) completions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, out.completion)
+}
+
+// conversationBytes is what the messages will cost the proposers' context,
+// counted the way task.ContextBytes counts it.
+func conversationBytes(msgs []task.ConvMessage) int {
+	n := 0
+	for _, m := range msgs {
+		n += len(m.Content)
+	}
+	return n
 }
 
 // answered is one finished request: either a completion or the error object
