@@ -42,12 +42,30 @@ type Judge struct {
 	MaxTokens      int      `json:"max_tokens"`
 	TimeoutSeconds int      `json:"timeout_seconds"`
 	// Seed nil means "derive from the run id", which is recorded either way.
-	Seed      *int64                     `json:"seed,omitempty"`
-	Parallel  int                        `json:"parallel"`
-	Grammar   bool                       `json:"grammar"`
-	APIKeyEnv string                     `json:"api_key_env,omitempty"`
-	ExtraBody map[string]json.RawMessage `json:"extra_body,omitempty"`
+	Seed     *int64 `json:"seed,omitempty"`
+	Parallel int    `json:"parallel"`
+	// OutputFormat is how the judge's JSON object is constrained.
+	OutputFormat JudgeOutputFormat          `json:"output_format"`
+	APIKeyEnv    string                     `json:"api_key_env,omitempty"`
+	ExtraBody    map[string]json.RawMessage `json:"extra_body,omitempty"`
 }
+
+// JudgeOutputFormat is how the judge is made to answer in JSON. It is a
+// closed enumeration; add a constant, and the exhaustive linter finds every
+// switch that must learn it.
+type JudgeOutputFormat string
+
+const (
+	// OutputJSONSchema sends an OpenAI `response_format` of type
+	// `json_schema`, which a server composes with its own chat format. It
+	// fixes the key order — the reason is written before the choice, so the
+	// choice cannot be reached without passing through it — and bounds the
+	// reason and the choice enum.
+	OutputJSONSchema JudgeOutputFormat = "json_schema"
+	// OutputNone constrains nothing and relies on the prompt alone. It is
+	// what a server that does not implement response_format needs.
+	OutputNone JudgeOutputFormat = "none"
+)
 
 // Serve configures the OpenAI-compatible HTTP face. It has no auth and no
 // TLS: it binds loopback, and a non-loopback address needs --allow-remote
@@ -129,6 +147,7 @@ const (
 	DefaultJudgeMaxTokens   = 512
 	DefaultJudgeTimeout     = 120
 	DefaultJudgeParallel    = 1
+	DefaultOutputFormat     = OutputJSONSchema
 	DefaultListen           = "127.0.0.1:8095"
 	DefaultPoolName         = "cmoa"
 	DefaultRunsDir          = "runs"
@@ -324,13 +343,28 @@ func (c *Config) fillJudge() error {
 	if j.Parallel < 1 {
 		return &ValidationError{"judge.parallel", "must be positive"}
 	}
+	if j.OutputFormat == "" {
+		j.OutputFormat = DefaultOutputFormat
+	}
+	switch j.OutputFormat {
+	case OutputJSONSchema, OutputNone:
+	default:
+		return &ValidationError{"judge.output_format", fmt.Sprintf("%q is not an output format; one of [%s %s]", j.OutputFormat, OutputJSONSchema, OutputNone)}
+	}
 	if j.APIKeyEnv != "" && !envNamePattern.MatchString(j.APIKeyEnv) {
 		return &ValidationError{"judge.api_key_env", fmt.Sprintf("%q is not an environment variable name", j.APIKeyEnv)}
 	}
 	for k := range j.ExtraBody {
 		switch k {
-		case "model", "messages", "temperature", "max_tokens", "seed", "stream", "n", "grammar":
+		case "model", "messages", "temperature", "max_tokens", "seed", "stream", "n", "response_format":
 			return &ValidationError{"judge.extra_body." + k, "is set by CMoA and cannot be overridden"}
+		case "grammar":
+			// A raw GBNF grammar is parsed beside the server's own chat
+			// format rather than composed with it, and a judge that speaks
+			// a structured chat format answers HTTP 500 to one. The
+			// supported way to constrain the answer is
+			// judge.output_format.
+			return &ValidationError{"judge.extra_body.grammar", "a raw grammar fights the judge's chat format; use judge.output_format instead"}
 		}
 	}
 	return nil

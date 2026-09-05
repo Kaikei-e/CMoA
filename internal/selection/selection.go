@@ -1,8 +1,14 @@
-// Package selection is the coding face's aggregation: every candidate that
-// propose recorded as ok is applied to its own worktree and verified in a
-// container; the first passing candidate in configured order is selected.
-// Nothing is merged, no judge is asked. The outcome is the sealed Selection
-// type, mirrored into select.json.
+// Package selection turns a run's candidates into one outcome.
+//
+// On the coding face every candidate propose recorded as ok is applied to
+// its own worktree and verified in a container, and the first passing
+// candidate in configured order is selected. On the chat face the answers
+// go to the judge in internal/judge, which compares them pairwise in both
+// orders. Nothing is ever merged, and neither face asks a model which
+// answer to keep on the coding face or runs a container on the chat face.
+//
+// The outcome of both is the sealed Selection type, mirrored into
+// select.json.
 package selection
 
 import (
@@ -22,9 +28,9 @@ import (
 	"github.com/Kaikei-e/CMoA/internal/worktree"
 )
 
-// Selection is the result of select. It is sealed: the four variants below
+// Selection is the result of select. It is sealed: the five variants below
 // are the only implementations, and gochecksumtype checks that every type
-// switch over it names all four.
+// switch over it names all five.
 //
 //sumtype:decl
 type Selection interface{ sealed() }
@@ -35,12 +41,23 @@ type Selected struct {
 	Reason      string
 }
 
-// NoCandidate: every candidate failed, or none was usable.
-type NoCandidate struct{ Tried int }
+// NoCandidate: every candidate failed, or none was usable. Reason
+// sub-classifies it on the chat face — cycle, no_majority, all_draws,
+// invalid_output, too_few_candidates — and is empty on the coding face,
+// where "the verifier passed nothing" is the whole story.
+type NoCandidate struct {
+	Tried  int
+	Reason trace.NoCandidateReason
+}
 
 // JudgeTimeout: the chat face's judge did not answer in time. Never
 // produced on the coding face; declared so the type is complete.
 type JudgeTimeout struct{ After time.Duration }
+
+// JudgeFailed: the judge endpoint itself could not be reached or did not
+// answer a chat completion. Like VerifierFailed it says nothing about any
+// candidate: the question was never put.
+type JudgeFailed struct{ Err error }
 
 // VerifierFailed: the verifier itself could not run (docker absent, compose
 // file broken). Says nothing about any candidate.
@@ -49,6 +66,7 @@ type VerifierFailed struct{ Err error }
 func (Selected) sealed()       {}
 func (NoCandidate) sealed()    {}
 func (JudgeTimeout) sealed()   {}
+func (JudgeFailed) sealed()    {}
 func (VerifierFailed) sealed() {}
 
 // Record converts a Selection into its trace form.
@@ -57,9 +75,11 @@ func Record(s Selection) trace.SelectionRecord {
 	case Selected:
 		return trace.SelectionRecord{Kind: trace.SelectionSelected, CandidateID: string(v.CandidateID), Reason: v.Reason}
 	case NoCandidate:
-		return trace.SelectionRecord{Kind: trace.SelectionNoCandidate, Tried: v.Tried}
+		return trace.SelectionRecord{Kind: trace.SelectionNoCandidate, Tried: v.Tried, Reason: string(v.Reason)}
 	case JudgeTimeout:
 		return trace.SelectionRecord{Kind: trace.SelectionJudgeTimeout, AfterMS: v.After.Milliseconds()}
+	case JudgeFailed:
+		return trace.SelectionRecord{Kind: trace.SelectionJudgeFailed, Error: v.Err.Error()}
 	case VerifierFailed:
 		return trace.SelectionRecord{Kind: trace.SelectionVerifierFailed, Error: v.Err.Error()}
 	}

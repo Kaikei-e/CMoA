@@ -427,7 +427,7 @@ type JudgeParams struct {
 	Temperature   float64 `json:"temperature"`
 	Seed          *int64  `json:"seed"`
 	MaxTokens     int     `json:"max_tokens"`
-	Grammar       bool    `json:"grammar"`
+	OutputFormat  string  `json:"output_format"`
 	Parallel      int     `json:"parallel"`
 	AllowTie      bool    `json:"allow_tie"`
 	PromptVersion string  `json:"prompt_version"`

@@ -2,6 +2,11 @@
 // configured proposer the same prompt at the same time, and records what
 // came back as candidates. It never retries and never judges; a bad answer
 // is a candidate with a status, so the layer above can mine it.
+//
+// Both faces go through the same router. The coding face sends the
+// instruction and the files and keeps the unified diff it finds; the chat
+// face sends the task's conversation and keeps the answer, with the style
+// metadata a later calibration needs recorded at the time it is written.
 package propose
 
 import (
@@ -9,8 +14,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Kaikei-e/CMoA/internal/config"
 	"github.com/Kaikei-e/CMoA/internal/harness"
@@ -26,6 +34,12 @@ import (
 // together exceed the task's max_context_bytes. Nothing is written: the run
 // would have sent a prompt the task refused to allow.
 var ErrContextBudget = errors.New("propose: context budget exceeded")
+
+// ErrNoJudge is returned when a chat task is proposed against a
+// configuration that has no judge. Nothing is written: the answers would
+// have nowhere to be selected, and a run that cannot be selected is a run
+// that spent the fleet for nothing.
+var ErrNoJudge = errors.New("propose: the chat face needs a judge: cmoa.json declares none (version 2 adds the judge block)")
 
 // Options tune a run.
 type Options struct {
@@ -57,6 +71,10 @@ func Run(ctx context.Context, cfg *config.Config, t *task.Task, opt Options) (tr
 		client = &llm.Client{HTTP: &http.Client{}}
 	}
 
+	if t.Face == task.FaceChat && cfg.Judge == nil {
+		return "", ErrNoJudge
+	}
+
 	// The overrides are applied before the effective config is recorded, so
 	// run.json says what was sent, not what the file said.
 	for i := range cfg.Proposers {
@@ -70,9 +88,13 @@ func Run(ctx context.Context, cfg *config.Config, t *task.Task, opt Options) (tr
 		}
 	}
 
-	rev, err := t.ResolveRev(ctx)
-	if err != nil {
-		return "", err
+	var rev string
+	if t.Face == task.FaceCoding {
+		resolved, err := t.ResolveRev(ctx)
+		if err != nil {
+			return "", err
+		}
+		rev = resolved
 	}
 	snap, err := harness.Take(ctx, cfg.Harness.Vault, cfg.Harness.Docdag, opt.AsOf)
 	if err != nil {
@@ -89,12 +111,22 @@ func Run(ctx context.Context, cfg *config.Config, t *task.Task, opt Options) (tr
 		// and memory and skills are the auto-accepted surfaces: an unbounded
 		// harness would silently overrun the server's context and be scored
 		// as a harness regression when it is a budget bug.
+		what := "instruction and files"
+		if t.Face == task.FaceChat {
+			what = "conversation"
+		}
 		if taskBytes, harnessBytes := t.ContextBytes(), rendered.Bytes(); taskBytes+harnessBytes > t.MaxContextBytes {
-			return "", fmt.Errorf("%w: instruction and files %d bytes plus harness %d bytes total %d, over max_context_bytes %d",
-				ErrContextBudget, taskBytes, harnessBytes, taskBytes+harnessBytes, t.MaxContextBytes)
+			return "", fmt.Errorf("%w: %s %d bytes plus harness %d bytes total %d, over max_context_bytes %d",
+				ErrContextBudget, what, taskBytes, harnessBytes, taskBytes+harnessBytes, t.MaxContextBytes)
 		}
 	}
-	messages, err := prompt.Build(t, rendered)
+	var messages []llm.Message
+	switch t.Face {
+	case task.FaceCoding:
+		messages, err = prompt.Build(t, rendered)
+	case task.FaceChat:
+		messages, err = prompt.BuildChat(t, rendered)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -107,9 +139,110 @@ func Run(ctx context.Context, cfg *config.Config, t *task.Task, opt Options) (tr
 	if err != nil {
 		return "", err
 	}
-	effective, err := cfg.Redacted()
+	run, err := newRun(cfg, t, id, rev, snap, opt, now)
 	if err != nil {
 		return "", err
+	}
+	if err := dir.WriteRun(run); err != nil {
+		return "", err
+	}
+	logf("run %s: %d proposers (byzantine f=%d)", id, run.Byzantine.N, run.Byzantine.F)
+
+	var wg sync.WaitGroup
+	errs := make([]error, len(cfg.Proposers))
+	for i := range cfg.Proposers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = ask(ctx, client, &cfg.Proposers[i], t.Face, messages, dir, now, logf)
+		}(i)
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return dir, fmt.Errorf("propose: writing candidates: %w", err)
+	}
+	return dir, nil
+}
+
+// External creates a run for candidates that were handed to CMoA rather
+// than proposed: `cmoa judge` reads answers off the command line, so no
+// proposer is asked and the run records where each answer came from. The
+// run is a chat run in every other respect, and select judges it the same
+// way.
+func External(ctx context.Context, cfg *config.Config, t *task.Task, answers []ExternalAnswer, opt Options) (trace.Dir, error) {
+	logf := opt.Log
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	now := opt.Now
+	if now == nil {
+		now = time.Now
+	}
+	if t.Face != task.FaceChat {
+		return "", fmt.Errorf("propose: external candidates are the chat face's; task %s is %s", t.ID, t.Face)
+	}
+	if cfg.Judge == nil {
+		return "", ErrNoJudge
+	}
+	if len(answers) < 1 {
+		return "", errors.New("propose: at least one candidate file is required")
+	}
+	snap, err := harness.Take(ctx, cfg.Harness.Vault, cfg.Harness.Docdag, opt.AsOf)
+	if err != nil {
+		return "", fmt.Errorf("propose: harness snapshot: %w", err)
+	}
+	id := opt.RunID
+	if id == "" {
+		id = trace.NewRunID(now())
+	}
+	dir, err := trace.Create(t.Dir, id)
+	if err != nil {
+		return "", err
+	}
+	run, err := newRun(cfg, t, id, "", snap, opt, now)
+	if err != nil {
+		return "", err
+	}
+	run.CandidatesOrigin = trace.OriginExternal
+	run.Proposers = nil
+	run.Byzantine = trace.Byzantine{N: len(answers), F: (len(answers) - 1) / 3}
+	for i, a := range answers {
+		cid := fmt.Sprintf("c%d", i+1)
+		run.Proposers = append(run.Proposers, trace.ProposerRef{ID: cid})
+		run.ExternalCandidates = append(run.ExternalCandidates, trace.ExternalCandidate{
+			ID: cid, File: a.File, SHA256: llm.SHA256([]byte(a.Text)),
+		})
+	}
+	if err := dir.WriteRun(run); err != nil {
+		return "", err
+	}
+	at := now().UTC()
+	for i, a := range answers {
+		cid := fmt.Sprintf("c%d", i+1)
+		cand := &trace.Candidate{
+			ProposerID: cid, Face: string(task.FaceChat), Origin: trace.OriginExternal,
+			StartedAt: at, FinishedAt: at,
+		}
+		body := classifyChat(cand, a.Text)
+		logf("%s: %s (%s, %d bytes)", cid, cand.Status, a.File, len(body))
+		if err := dir.WriteChatCandidate(cand, []byte(a.Text), body); err != nil {
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
+// ExternalAnswer is one candidate read off the command line.
+type ExternalAnswer struct {
+	File string // as written on the command line, for the record
+	Text string
+}
+
+// newRun builds run.json for either face. rev is empty on the chat face.
+func newRun(cfg *config.Config, t *task.Task, id trace.RunID, rev string, snap *harness.Snapshot, opt Options, now func() time.Time) (*trace.Run, error) {
+	effective, err := cfg.Redacted()
+	if err != nil {
+		return nil, err
 	}
 	n, f := cfg.ByzantineTolerance()
 	run := &trace.Run{
@@ -118,6 +251,7 @@ func Run(ctx context.Context, cfg *config.Config, t *task.Task, opt Options) (tr
 		CreatedAt:     now().UTC(),
 		CMoAVersion:   opt.Version,
 		PromptVersion: prompt.Version(),
+		Face:          string(t.Face),
 		Task: trace.TaskRef{
 			ID: string(t.ID), Dir: t.Dir, Repo: t.Repo, Rev: t.Rev, ResolvedRev: rev,
 			Files: t.FilePaths(), InstructionSHA256: t.InstructionSHA256(),
@@ -126,28 +260,14 @@ func Run(ctx context.Context, cfg *config.Config, t *task.Task, opt Options) (tr
 		Harness:   harnessRecord(snap, opt.Harness),
 		Byzantine: trace.Byzantine{N: n, F: f},
 	}
+	if t.Face == task.FaceChat {
+		run.ConversationSHA256 = t.ConversationSHA256()
+		run.CandidatesOrigin = trace.OriginProposers
+	}
 	for _, p := range cfg.Proposers {
 		run.Proposers = append(run.Proposers, trace.ProposerRef{ID: string(p.ID), Model: p.Model, BaseURL: p.BaseURL})
 	}
-	if err := dir.WriteRun(run); err != nil {
-		return "", err
-	}
-	logf("run %s: %d proposers (byzantine f=%d)", id, n, f)
-
-	var wg sync.WaitGroup
-	errs := make([]error, len(cfg.Proposers))
-	for i := range cfg.Proposers {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			errs[i] = ask(ctx, client, &cfg.Proposers[i], messages, dir, now, logf)
-		}(i)
-	}
-	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
-		return dir, fmt.Errorf("propose: writing candidates: %w", err)
-	}
-	return dir, nil
+	return run, nil
 }
 
 func harnessRecord(s *harness.Snapshot, dir *harnessdir.Dir) trace.Harness {
@@ -170,7 +290,7 @@ func harnessRecord(s *harness.Snapshot, dir *harnessdir.Dir) trace.Harness {
 
 // ask sends one request and writes prompt/<id>.json and candidates/<id>.*.
 // Only trace write failures are returned.
-func ask(ctx context.Context, client *llm.Client, p *config.Proposer, messages []llm.Message, dir trace.Dir, now func() time.Time, logf func(string, ...any)) error {
+func ask(ctx context.Context, client *llm.Client, p *config.Proposer, face task.Face, messages []llm.Message, dir trace.Dir, now func() time.Time, logf func(string, ...any)) error {
 	key, err := p.APIKey()
 	if err != nil {
 		return err
@@ -179,7 +299,7 @@ func ask(ctx context.Context, client *llm.Client, p *config.Proposer, messages [
 		BaseURL: p.BaseURL, APIKey: key, Model: p.Model, Messages: messages,
 		Temperature: *p.Temperature, MaxTokens: p.MaxTokens, Seed: p.Seed, ExtraBody: p.ExtraBody,
 	}
-	cand := &trace.Candidate{ProposerID: string(p.ID), Model: p.Model, StartedAt: now().UTC()}
+	cand := &trace.Candidate{ProposerID: string(p.ID), Model: p.Model, Face: string(face), StartedAt: now().UTC()}
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(p.TimeoutSeconds)*time.Second)
 	defer cancel()
 	resp, callErr := client.ChatCompletion(reqCtx, req)
@@ -187,7 +307,7 @@ func ask(ctx context.Context, client *llm.Client, p *config.Proposer, messages [
 	cand.Timings.RequestMS = cand.FinishedAt.Sub(cand.StartedAt).Milliseconds()
 
 	var raw []byte
-	var diff string
+	var body string // the diff on the coding face, the answer on the chat face
 	if callErr == nil {
 		raw = []byte(resp.RawContent)
 		cand.FinishReason = resp.FinishReason
@@ -200,7 +320,12 @@ func ask(ctx context.Context, client *llm.Client, p *config.Proposer, messages [
 		if err := dir.WritePrompt(&trace.Prompt{ProposerID: string(p.ID), Messages: toTraceMessages(messages), Request: resp.RequestBody, SHA256: cand.RequestSHA256}); err != nil {
 			return err
 		}
-		diff = classify(cand, resp.Content)
+		switch face {
+		case task.FaceCoding:
+			body = classify(cand, resp.Content)
+		case task.FaceChat:
+			body = classifyChat(cand, resp.Content)
+		}
 	} else {
 		cand.Error = callErr.Error()
 		var he *llm.HTTPError
@@ -222,7 +347,57 @@ func ask(ctx context.Context, client *llm.Client, p *config.Proposer, messages [
 		}
 	}
 	logf("%s: %s (%s, %d tokens)", p.ID, cand.Status, time.Duration(cand.Timings.RequestMS)*time.Millisecond, cand.Usage.CompletionTokens)
-	return dir.WriteCandidate(cand, raw, diff)
+	switch face {
+	case task.FaceChat:
+		return dir.WriteChatCandidate(cand, raw, body)
+	case task.FaceCoding:
+	}
+	return dir.WriteCandidate(cand, raw, body)
+}
+
+// classifyChat sets the candidate's status from the completion text and
+// returns the answer. An answer that is only whitespace is `empty`: the
+// proposer answered, and answered nothing, which is a different failure
+// from not answering at all.
+func classifyChat(cand *trace.Candidate, content string) string {
+	answer := strings.TrimSpace(content)
+	if answer == "" {
+		cand.Status = trace.CandidateEmpty
+		cand.Error = "the completion held no text"
+		return ""
+	}
+	cand.Status = trace.CandidateOK
+	cand.AnswerSHA256 = llm.SHA256([]byte(answer))
+	cand.AnswerBytes = len(answer)
+	cand.Metadata = AnswerMetadata(answer, cand.Usage.CompletionTokens)
+	return answer
+}
+
+var (
+	headerLine    = regexp.MustCompile(`(?m)^#{1,6} +\S`)
+	listLine      = regexp.MustCompile(`(?m)^[ \t]*(?:[-*+]|[0-9]+[.)]) +\S`)
+	boldSpan      = regexp.MustCompile(`\*\*[^*\n]+\*\*`)
+	codeFenceLine = regexp.MustCompile("(?m)^[ \t]*(?:```|~~~)")
+)
+
+// AnswerMetadata is the style accounting Arena-Hard records for every
+// answer: how long it is and how decorated. None of it reaches the judge —
+// it exists so a later analysis can ask whether the judge was buying length
+// and formatting, and that question cannot be answered by numbers nobody
+// wrote down at the time. tokens is the server's completion_tokens; -1 is
+// recorded when it reported none.
+func AnswerMetadata(answer string, tokens int) *trace.CandidateMetadata {
+	if tokens <= 0 {
+		tokens = -1
+	}
+	return &trace.CandidateMetadata{
+		TokenLen:       tokens,
+		Chars:          utf8.RuneCountInString(answer),
+		HeaderCount:    len(headerLine.FindAllString(answer, -1)),
+		ListCount:      len(listLine.FindAllString(answer, -1)),
+		BoldCount:      len(boldSpan.FindAllString(answer, -1)),
+		CodeFenceCount: len(codeFenceLine.FindAllString(answer, -1)),
+	}
 }
 
 // classify sets the candidate's status from the completion text and returns
