@@ -1,6 +1,6 @@
 ---
 title: "v0 のスコープに verify コマンドと task.json v2 を足し、Go 標準ライブラリだけで書く決定を引き継ぐ"
-status: accepted
+status: superseded
 date: 2026-09-05
 supersedes: [0002]
 depends-on: [0004, 0005]

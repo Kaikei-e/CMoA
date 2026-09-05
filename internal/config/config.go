@@ -2,12 +2,18 @@
 // run, where the harness vault is, and how candidates are verified. Loading
 // fills defaults and validates every field, so the rest of CMoA never sees
 // a half-formed configuration. YAML is deliberately not accepted.
+//
+// cmoa.json has two versions. Version 1 is the coding face: proposers, the
+// vault, the verifier. Version 2 adds the chat face's two blocks, `judge`
+// and `serve`; a version 1 file means "no judge, no serve" and refuses
+// either block rather than ignoring it.
 package config
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,6 +28,54 @@ type Config struct {
 	Harness   Harness    `json:"harness"`
 	Verify    Verify     `json:"verify"`
 	Selection Selection  `json:"selection"`
+	Judge     *Judge     `json:"judge,omitempty"` // version 2; nil means the chat face is not configured
+	Serve     *Serve     `json:"serve,omitempty"` // version 2; nil means cmoa serve is not configured
+}
+
+// Judge is the single model that selects on the chat face. It is
+// deliberately one endpoint and not a pool: a panel of judges buys far less
+// than its cost, and the one judge is measured by calibration instead.
+type Judge struct {
+	BaseURL        string   `json:"base_url"`
+	Model          string   `json:"model"`
+	Temperature    *float64 `json:"temperature"` // nil in the file means DefaultJudgeTemperature
+	MaxTokens      int      `json:"max_tokens"`
+	TimeoutSeconds int      `json:"timeout_seconds"`
+	// Seed nil means "derive from the run id", which is recorded either way.
+	Seed     *int64 `json:"seed,omitempty"`
+	Parallel int    `json:"parallel"`
+	// OutputFormat is how the judge's JSON object is constrained.
+	OutputFormat JudgeOutputFormat          `json:"output_format"`
+	APIKeyEnv    string                     `json:"api_key_env,omitempty"`
+	ExtraBody    map[string]json.RawMessage `json:"extra_body,omitempty"`
+}
+
+// JudgeOutputFormat is how the judge is made to answer in JSON. It is a
+// closed enumeration; add a constant, and the exhaustive linter finds every
+// switch that must learn it.
+type JudgeOutputFormat string
+
+const (
+	// OutputJSONSchema sends an OpenAI `response_format` of type
+	// `json_schema`, which a server composes with its own chat format. It
+	// fixes the key order — the reason is written before the choice, so the
+	// choice cannot be reached without passing through it — and bounds the
+	// reason and the choice enum.
+	OutputJSONSchema JudgeOutputFormat = "json_schema"
+	// OutputNone constrains nothing and relies on the prompt alone. It is
+	// what a server that does not implement response_format needs.
+	OutputNone JudgeOutputFormat = "none"
+)
+
+// Serve configures the OpenAI-compatible HTTP face. It has no auth and no
+// TLS: it binds loopback, and a non-loopback address needs --allow-remote
+// on the command line, where a person types it.
+type Serve struct {
+	Listen       string `json:"listen"`
+	PoolName     string `json:"pool_name"`
+	RunsDir      string `json:"runs_dir"` // relative to the config file; absolute after Load
+	MaxBodyBytes int64  `json:"max_body_bytes"`
+	MaxInflight  int    `json:"max_inflight"`
 }
 
 // Proposer is one model endpoint the router asks for a candidate.
@@ -87,6 +141,23 @@ const (
 	DefaultVerifyTimeout  = 600
 )
 
+// Defaults for the chat face.
+const (
+	DefaultJudgeTemperature = 0.0
+	DefaultJudgeMaxTokens   = 512
+	DefaultJudgeTimeout     = 120
+	DefaultJudgeParallel    = 1
+	DefaultOutputFormat     = OutputJSONSchema
+	DefaultListen           = "127.0.0.1:8095"
+	DefaultPoolName         = "cmoa"
+	DefaultRunsDir          = "runs"
+	DefaultMaxBodyBytes     = 1 << 20
+	DefaultMaxInflight      = 1
+)
+
+// MaxVersion is the newest cmoa.json this build understands.
+const MaxVersion = 2
+
 // ValidationError reports one field that failed validation.
 type ValidationError struct {
 	Path string // JSON path, e.g. proposers[1].base_url
@@ -105,14 +176,22 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Relative vault paths are relative to the config file.
-	if !filepath.IsAbs(cfg.Harness.Vault) {
-		cfg.Harness.Vault = filepath.Join(filepath.Dir(path), cfg.Harness.Vault)
-	}
-	if abs, err := filepath.Abs(cfg.Harness.Vault); err == nil {
-		cfg.Harness.Vault = abs
+	// Relative vault and runs paths are relative to the config file.
+	cfg.Harness.Vault = absoluteTo(filepath.Dir(path), cfg.Harness.Vault)
+	if cfg.Serve != nil {
+		cfg.Serve.RunsDir = absoluteTo(filepath.Dir(path), cfg.Serve.RunsDir)
 	}
 	return cfg, nil
+}
+
+func absoluteTo(base, p string) string {
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(base, p)
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
 }
 
 // Parse decodes and validates JSON bytes. Unknown fields are errors: a typo
@@ -131,8 +210,16 @@ func Parse(b []byte) (*Config, error) {
 }
 
 func (c *Config) fillAndValidate() error {
-	if c.Version != 1 {
-		return &ValidationError{"version", fmt.Sprintf("must be 1, got %d", c.Version)}
+	if c.Version < 1 || c.Version > MaxVersion {
+		return &ValidationError{"version", fmt.Sprintf("must be between 1 and %d, got %d", MaxVersion, c.Version)}
+	}
+	if c.Version == 1 {
+		switch {
+		case c.Judge != nil:
+			return &ValidationError{"judge", "requires version 2"}
+		case c.Serve != nil:
+			return &ValidationError{"serve", "requires version 2"}
+		}
 	}
 	if len(c.Proposers) == 0 {
 		return &ValidationError{"proposers", "at least one proposer is required"}
@@ -212,10 +299,116 @@ func (c *Config) fillAndValidate() error {
 	default:
 		return &ValidationError{"selection.rule", fmt.Sprintf("%q is not a selection rule; one of [first]", c.Selection.Rule)}
 	}
+	if err := c.fillJudge(); err != nil {
+		return err
+	}
+	return c.fillServe()
+}
+
+func (c *Config) fillJudge() error {
+	j := c.Judge
+	if j == nil {
+		return nil
+	}
+	u, err := url.Parse(j.BaseURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return &ValidationError{"judge.base_url", fmt.Sprintf("%q must be an http(s) URL", j.BaseURL)}
+	}
+	j.BaseURL = strings.TrimRight(j.BaseURL, "/")
+	if strings.TrimSpace(j.Model) == "" {
+		return &ValidationError{"judge.model", "must not be empty"}
+	}
+	if j.Temperature == nil {
+		t := DefaultJudgeTemperature
+		j.Temperature = &t
+	}
+	if *j.Temperature < 0 || *j.Temperature > 2 {
+		return &ValidationError{"judge.temperature", fmt.Sprintf("%v is outside [0, 2]", *j.Temperature)}
+	}
+	if j.MaxTokens == 0 {
+		j.MaxTokens = DefaultJudgeMaxTokens
+	}
+	if j.MaxTokens < 1 {
+		return &ValidationError{"judge.max_tokens", "must be positive"}
+	}
+	if j.TimeoutSeconds == 0 {
+		j.TimeoutSeconds = DefaultJudgeTimeout
+	}
+	if j.TimeoutSeconds < 1 {
+		return &ValidationError{"judge.timeout_seconds", "must be positive"}
+	}
+	if j.Parallel == 0 {
+		j.Parallel = DefaultJudgeParallel
+	}
+	if j.Parallel < 1 {
+		return &ValidationError{"judge.parallel", "must be positive"}
+	}
+	if j.OutputFormat == "" {
+		j.OutputFormat = DefaultOutputFormat
+	}
+	switch j.OutputFormat {
+	case OutputJSONSchema, OutputNone:
+	default:
+		return &ValidationError{"judge.output_format", fmt.Sprintf("%q is not an output format; one of [%s %s]", j.OutputFormat, OutputJSONSchema, OutputNone)}
+	}
+	if j.APIKeyEnv != "" && !envNamePattern.MatchString(j.APIKeyEnv) {
+		return &ValidationError{"judge.api_key_env", fmt.Sprintf("%q is not an environment variable name", j.APIKeyEnv)}
+	}
+	for k := range j.ExtraBody {
+		switch k {
+		case "model", "messages", "temperature", "max_tokens", "seed", "stream", "n", "response_format":
+			return &ValidationError{"judge.extra_body." + k, "is set by CMoA and cannot be overridden"}
+		case "grammar":
+			// A raw GBNF grammar is parsed beside the server's own chat
+			// format rather than composed with it, and a judge that speaks
+			// a structured chat format answers HTTP 500 to one. The
+			// supported way to constrain the answer is
+			// judge.output_format.
+			return &ValidationError{"judge.extra_body.grammar", "a raw grammar fights the judge's chat format; use judge.output_format instead"}
+		}
+	}
 	return nil
 }
 
-var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+func (c *Config) fillServe() error {
+	s := c.Serve
+	if s == nil {
+		return nil
+	}
+	if s.Listen == "" {
+		s.Listen = DefaultListen
+	}
+	if _, _, err := net.SplitHostPort(s.Listen); err != nil {
+		return &ValidationError{"serve.listen", fmt.Sprintf("%q is not host:port: %v", s.Listen, err)}
+	}
+	if s.PoolName == "" {
+		s.PoolName = DefaultPoolName
+	}
+	if !poolNamePattern.MatchString(s.PoolName) {
+		return &ValidationError{"serve.pool_name", fmt.Sprintf("%q must match %s: it is the model id clients ask for", s.PoolName, poolNamePattern)}
+	}
+	if s.RunsDir == "" {
+		s.RunsDir = DefaultRunsDir
+	}
+	if s.MaxBodyBytes == 0 {
+		s.MaxBodyBytes = DefaultMaxBodyBytes
+	}
+	if s.MaxBodyBytes < 1 {
+		return &ValidationError{"serve.max_body_bytes", "must be positive"}
+	}
+	if s.MaxInflight == 0 {
+		s.MaxInflight = DefaultMaxInflight
+	}
+	if s.MaxInflight < 1 {
+		return &ValidationError{"serve.max_inflight", "must be positive"}
+	}
+	return nil
+}
+
+var (
+	envNamePattern  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	poolNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+)
 
 // Discover returns the config path from, in order, the --config flag, the
 // CMOA_CONFIG environment variable, <taskDir>/cmoa.json, ./cmoa.json.
@@ -253,12 +446,20 @@ func (c *Config) Redacted() (json.RawMessage, error) {
 // APIKey resolves the proposer's key from the environment, empty when none
 // is configured.
 func (p *Proposer) APIKey() (string, error) {
-	if p.APIKeyEnv == "" {
+	return lookupKey(p.APIKeyEnv, "proposer "+string(p.ID))
+}
+
+// APIKey resolves the judge's key from the environment, empty when none is
+// configured.
+func (j *Judge) APIKey() (string, error) { return lookupKey(j.APIKeyEnv, "judge") }
+
+func lookupKey(name, who string) (string, error) {
+	if name == "" {
 		return "", nil
 	}
-	v, ok := os.LookupEnv(p.APIKeyEnv)
+	v, ok := os.LookupEnv(name)
 	if !ok {
-		return "", fmt.Errorf("config: proposer %s: environment variable %s is not set", p.ID, p.APIKeyEnv)
+		return "", fmt.Errorf("config: %s: environment variable %s is not set", who, name)
 	}
 	return v, nil
 }

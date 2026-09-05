@@ -46,6 +46,7 @@ type Request struct {
 type Response struct {
 	Content      string // reasoning blocks stripped; see StripReasoning
 	RawContent   string // as returned
+	Reasoning    string // reasoning_content, when the server separates it
 	FinishReason string
 	Usage        Usage
 	Timings      Timings
@@ -54,10 +55,16 @@ type Response struct {
 	Elapsed      time.Duration
 }
 
-// Usage is the OpenAI usage object.
+// Usage is the OpenAI usage object. ReasoningTokens comes from
+// completion_tokens_details and is zero on servers that do not report it;
+// it is part of CompletionTokens, not additional to it, which is how a
+// completion of 4096 tokens and no answer is told from an empty one.
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
+	Details          struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
 }
 
 // Timings is llama-server's per-request timings object. Servers that do not
@@ -152,6 +159,7 @@ func (c *Client) ChatCompletion(ctx context.Context, req Request) (*Response, er
 	return &Response{
 		Content:      StripReasoning(ch.Message.Content),
 		RawContent:   ch.Message.Content,
+		Reasoning:    ch.Message.ReasoningContent,
 		FinishReason: ch.FinishReason,
 		Usage:        parsed.Usage,
 		Timings:      parsed.Timings,

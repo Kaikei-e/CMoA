@@ -103,6 +103,79 @@ func TestE2EVerify(t *testing.T) {
 	}
 }
 
+// TestE2EChat runs propose and select on examples/task-chat-hello against a
+// real proposer fleet and a real judge, then judges three answers of its own
+// with `cmoa judge`. Skipped unless CMOA_E2E=1; CMOA_CONFIG must point at a
+// version 2 cmoa.json with a judge block. No Docker is needed: the chat face
+// runs no container.
+func TestE2EChat(t *testing.T) {
+	if os.Getenv("CMOA_E2E") != "1" {
+		t.Skip("set CMOA_E2E=1 (and CMOA_CONFIG) to run against a live fleet and judge")
+	}
+	root, _ := os.Getwd()
+	bin := build(t, root)
+	taskDir := filepath.Join(root, "examples", "task-chat-hello")
+	runCmd := func(args ...string) string {
+		cmd := exec.Command(bin, args...)
+		cmd.Stderr = os.Stderr
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("cmoa %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	type outcome struct {
+		Kind        string   `json:"kind"`
+		CandidateID string   `json:"candidate_id"`
+		Reason      string   `json:"reason"`
+		Ranked      []string `json:"ranked"`
+		Run         string   `json:"run"`
+	}
+	decode := func(line string) outcome {
+		t.Helper()
+		var o outcome
+		if err := json.Unmarshal([]byte(strings.SplitN(line, "\n", 2)[0]), &o); err != nil {
+			t.Fatalf("%v: %s", err, line)
+		}
+		return o
+	}
+
+	runDir := runCmd("propose", "--task", taskDir)
+	t.Logf("run: %s", runDir)
+	o := decode(runCmd("select", "--task", taskDir, "--run", runDir))
+	t.Logf("select: %+v", o)
+	// Any outcome is a result; what must hold is that the judge answered
+	// and left a reconstructible record of every call it made.
+	if o.Kind == "" || o.Run == "" {
+		t.Fatalf("select printed no outcome: %+v", o)
+	}
+	report := filepath.Join(runDir, "judge.json")
+	if _, err := os.Stat(report); err != nil {
+		t.Fatal(err)
+	}
+
+	// Three answers CMoA did not produce, judged with no proposer call.
+	files := map[string]string{
+		"c1.txt": "A nil slice marshals to `null` in encoding/json; an empty slice marshals to `[]`. " +
+			"Everything else — len, cap, range, append — behaves the same.",
+		"c2.txt": "No, they are identical in every way.",
+		"c3.txt": "Slices are hard. It depends on your use case.",
+	}
+	args := []string{"judge", "--task", taskDir, "--seed", "7"}
+	for name, body := range files {
+		p := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		args = append(args, "--candidate", p)
+	}
+	j := decode(runCmd(args...))
+	t.Logf("judge: %+v", j)
+	if j.Kind == "" || len(j.Ranked) != 3 {
+		t.Fatalf("judge printed %+v", j)
+	}
+}
+
 func build(t *testing.T, root string) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "cmoa")

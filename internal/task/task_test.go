@@ -3,9 +3,11 @@ package task
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -185,7 +187,7 @@ func TestV2Defaults(t *testing.T) {
 
 func TestLoadV2Errors(t *testing.T) {
 	cases := map[string]string{
-		"version":                `{"version":3,"id":"h","repo":"repo","files":["add.go"]}`,
+		"version":                `{"version":4,"id":"h","repo":"repo","files":["add.go"]}`,
 		"verify.kind":            `{"version":2,"id":"h","repo":"repo","files":["add.go"],"verify":{"kind":"exitcode"}}`,
 		"verify.timeout_seconds": `{"version":2,"id":"h","repo":"repo","files":["add.go"],"verify":{"timeout_seconds":-1}}`,
 		"mutants[0].diff":        `{"version":2,"id":"h","repo":"repo","files":["add.go"],"mutants":[{"diff":"../escape.diff"}]}`,
@@ -297,5 +299,167 @@ func TestResolveRev(t *testing.T) {
 	tk.Rev = "nope"
 	if _, err := tk.ResolveRev(context.Background()); err == nil {
 		t.Fatal("bad rev must fail")
+	}
+}
+
+// chatDir writes a chat task directory and returns it.
+func chatDir(t *testing.T, manifest string, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "task.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+const chatManifest = `{"version":3,"id":"c","face":"chat","conversation":"conversation.json",
+ "reference":{"answer":"reference.md"},"rubric":"rubric.md","judge":{"allow_tie":false}}`
+
+var chatFiles = map[string]string{
+	"conversation.json": `[{"role":"system","content":"be brief"},{"role":"user","content":"hi"},
+	                       {"role":"assistant","content":"hello"},{"role":"user","content":"why?"}]`,
+	"reference.md": "because\n",
+	"rubric.md":    "- is right\n",
+}
+
+func TestLoadChat(t *testing.T) {
+	var logged []string
+	dir := chatDir(t, chatManifest, chatFiles)
+	// An instruction.md left over from the coding face is ignored, not
+	// refused: a converted task keeps its history.
+	if err := os.WriteFile(filepath.Join(dir, "instruction.md"), []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tk, err := Load(dir, WithLog(func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Face != FaceChat || tk.Repo != "" || tk.Instruction != "" {
+		t.Fatalf("%+v", tk)
+	}
+	if len(tk.Chat.Conversation) != 4 || tk.Chat.Conversation[3].Content != "why?" {
+		t.Fatalf("%+v", tk.Chat.Conversation)
+	}
+	if tk.Chat.ReferenceAnswer != "because\n" || tk.Chat.Rubric != "- is right\n" || tk.Chat.AllowTie {
+		t.Errorf("%+v", tk.Chat)
+	}
+	// The judge's documents are not the proposers' context.
+	if got := tk.ContextBytes(); got != len("be brief")+len("hi")+len("hello")+len("why?") {
+		t.Errorf("ContextBytes = %d", got)
+	}
+	if tk.ConversationSHA256() == "" || len(logged) != 1 || !strings.Contains(logged[0], "instruction.md") {
+		t.Errorf("log %v", logged)
+	}
+	// allow_tie defaults to true, and conversation.json is the default path.
+	plain, err := Load(chatDir(t, `{"version":3,"id":"c","face":"chat"}`, chatFiles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plain.Chat.AllowTie || plain.Chat.ConversationPath != ConversationFile || plain.Chat.Rubric != "" {
+		t.Errorf("%+v", plain.Chat)
+	}
+}
+
+// Each version refuses the fields that do not belong to it, and each face
+// refuses the other's. A field that is silently ignored is a task that
+// measures something other than what it says.
+func TestFaceAndVersionFields(t *testing.T) {
+	for _, tc := range []struct{ path, manifest string }{
+		{"face", `{"version":2,"id":"h","face":"coding","repo":"repo","files":["add.go"]}`},
+		{"conversation", `{"version":2,"id":"h","repo":"repo","files":["add.go"],"conversation":"c.json"}`},
+		{"rubric", `{"version":1,"id":"h","repo":"repo","files":["add.go"],"rubric":"r.md"}`},
+		{"judge", `{"version":2,"id":"h","repo":"repo","files":["add.go"],"judge":{"allow_tie":true}}`},
+		{"reference.answer", `{"version":2,"id":"h","repo":"repo","files":["add.go"],"reference":{"answer":"a.md"}}`},
+		{"face", `{"version":3,"id":"h","repo":"repo","files":["add.go"]}`},
+		{"face", `{"version":3,"id":"h","face":"chatting"}`},
+		{"conversation", `{"version":3,"id":"h","face":"coding","repo":"repo","files":["add.go"],"conversation":"c.json"}`},
+		{"judge", `{"version":3,"id":"h","face":"coding","repo":"repo","files":["add.go"],"judge":{}}`},
+	} {
+		_, err := Load(withFiles(t, tc.manifest, nil))
+		ve, ok := errors.AsType[*ValidationError](err)
+		if !ok {
+			t.Errorf("%s: want ValidationError, got %v", tc.path, err)
+			continue
+		}
+		if ve.Path != tc.path {
+			t.Errorf("want %s, got %s: %s", tc.path, ve.Path, ve.Msg)
+		}
+	}
+	// A chat task carries no field that describes a repository.
+	for _, tc := range []struct{ path, manifest string }{
+		{"repo", `{"version":3,"id":"c","face":"chat","repo":"repo"}`},
+		{"rev", `{"version":3,"id":"c","face":"chat","rev":"HEAD"}`},
+		{"files", `{"version":3,"id":"c","face":"chat","files":["a.go"]}`},
+		{"verify", `{"version":3,"id":"c","face":"chat","verify":{"service":"v"}}`},
+		{"mutants", `{"version":3,"id":"c","face":"chat","mutants":[{"diff":"m.diff"}]}`},
+		{"doctor", `{"version":3,"id":"c","face":"chat","doctor":{"reference_runs":1}}`},
+		{"reference.diff", `{"version":3,"id":"c","face":"chat","reference":{"diff":"r.diff"}}`},
+	} {
+		_, err := Load(chatDir(t, tc.manifest, chatFiles))
+		ve, ok := errors.AsType[*ValidationError](err)
+		if !ok {
+			t.Errorf("%s: want ValidationError, got %v", tc.path, err)
+			continue
+		}
+		if ve.Path != tc.path {
+			t.Errorf("want %s, got %s: %s", tc.path, ve.Path, ve.Msg)
+		}
+	}
+}
+
+func TestConversationErrors(t *testing.T) {
+	for _, tc := range []struct{ name, conv string }{
+		{"empty array", `[]`},
+		{"not an array", `{"role":"user","content":"hi"}`},
+		{"an unknown role", `[{"role":"tool","content":"hi"}]`},
+		{"empty content", `[{"role":"user","content":"  "}]`},
+		{"an unknown field", `[{"role":"user","content":"hi","name":"n"}]`},
+		{"the assistant speaks last", `[{"role":"user","content":"hi"},{"role":"assistant","content":"ho"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(chatDir(t, `{"version":3,"id":"c","face":"chat"}`, map[string]string{"conversation.json": tc.conv}))
+			ve, ok := errors.AsType[*ValidationError](err)
+			if !ok {
+				t.Fatalf("want ValidationError, got %v", err)
+			}
+			if ve.Path != "conversation" {
+				t.Errorf("path %s: %s", ve.Path, ve.Msg)
+			}
+		})
+	}
+	// A missing conversation, a missing rubric and an empty reference are
+	// errors too: a task that names a document must have it.
+	for _, tc := range []struct {
+		path, manifest string
+		files          map[string]string
+	}{
+		{"conversation", `{"version":3,"id":"c","face":"chat"}`, nil},
+		{"rubric", `{"version":3,"id":"c","face":"chat","rubric":"nope.md"}`, chatFiles},
+		{"reference.answer", `{"version":3,"id":"c","face":"chat","reference":{"answer":"empty.md"}}`,
+			map[string]string{"conversation.json": chatFiles["conversation.json"], "empty.md": "  \n"}},
+		{"conversation", `{"version":3,"id":"c","face":"chat","conversation":"../escape.json"}`, chatFiles},
+	} {
+		_, err := Load(chatDir(t, tc.manifest, tc.files))
+		ve, ok := errors.AsType[*ValidationError](err)
+		if !ok {
+			t.Errorf("%s: want ValidationError, got %v", tc.path, err)
+			continue
+		}
+		if ve.Path != tc.path {
+			t.Errorf("want %s, got %s: %s", tc.path, ve.Path, ve.Msg)
+		}
+	}
+}
+
+func TestChatContextBudget(t *testing.T) {
+	_, err := Load(chatDir(t, `{"version":3,"id":"c","face":"chat","max_context_bytes":4}`, chatFiles))
+	ve, ok := errors.AsType[*ValidationError](err)
+	if !ok || ve.Path != "conversation" {
+		t.Fatalf("%v", err)
 	}
 }
