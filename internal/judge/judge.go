@@ -21,14 +21,16 @@ package judge
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	mathrand "math/rand/v2"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -68,7 +70,9 @@ type Judge struct {
 	Client *llm.Client
 	Dir    trace.Dir
 	Now    func() time.Time
-	Log    func(format string, args ...any)
+	// Log is called from the goroutine that made each call, so it must be
+	// safe for concurrent use.
+	Log func(format string, args ...any)
 }
 
 // Run performs the protocol and writes judge/<pair>-<order>.json and
@@ -87,6 +91,22 @@ func (j *Judge) Run(ctx context.Context, in Input) (*trace.JudgeReport, error) {
 		logf = func(string, ...any) {}
 	}
 	started := now()
+
+	// Refuse before spending, not after. judge.json is write-once and is
+	// written last, so a run that already has one would otherwise pay for
+	// all six calls and then fail at the final write.
+	if _, err := os.Stat(j.Dir.JudgeFile()); err == nil {
+		return nil, fmt.Errorf("%w: %s; a run is judged once", trace.ErrExists, j.Dir.JudgeFile())
+	}
+	// A previous attempt that died between the calls and judge.json leaves
+	// call files behind. They belong to a selection that never happened, and
+	// a different seed makes different pairs, so they are cleared rather
+	// than left to be read as part of this one.
+	if n, err := clearCalls(j.Dir); err != nil {
+		return nil, err
+	} else if n > 0 {
+		logf("judge: cleared %d call file(s) from an attempt that left no judge.json", n)
+	}
 
 	rep := &trace.JudgeReport{
 		SchemaVersion: trace.SchemaVersion,
@@ -121,42 +141,36 @@ func (j *Judge) Run(ctx context.Context, in Input) (*trace.JudgeReport, error) {
 		rep.InjectionFlags[c.ID] = InjectionFlags(c.Answer)
 	}
 
-	perm, seedSource := Permutation(in.RunID, in.Seed, len(in.Candidates))
-	nonce, err := Nonce()
-	if err != nil {
-		return nil, err
-	}
-	rep.Presentation = trace.Presentation{Permutation: perm, Nonce: nonce, SeedSource: seedSource}
+	seed, seedSource := PresentationSeed(in.RunID, in.Seed)
+	nonce := Nonce(seed)
+	rep.Presentation = trace.Presentation{Seed: seed, SeedSource: seedSource, Nonce: nonce}
 
 	if len(in.Candidates) < 2 {
-		rep.Outcome = trace.JudgeOutcome{
-			Kind:   trace.SelectionNoCandidate,
-			Reason: string(trace.ReasonTooFewCandidates),
-		}
-		rep.Ranked = ranked(rep.Candidates, rep.Wins)
+		Aggregate(rep)
 		return rep, j.finish(rep, started, now)
 	}
 
-	// Round-robin over the presented order: the pairs, and the order inside
-	// each pair, are what the permutation decides, so the same run id asks
-	// the same six questions.
+	// Round-robin in the caller's order. There is no shuffle: both orders
+	// of every pair are asked, so permuting the candidates would only
+	// renumber the pairs and swap which order is filed as -ab, without
+	// changing one byte of any request. The seeded nonce is what a re-run
+	// actually varies.
 	type call struct {
 		pair          int
 		order         string
 		first, second int // indices into in.Candidates
 	}
 	var calls []call
-	for i := 0; i < len(perm); i++ {
-		for k := i + 1; k < len(perm); k++ {
+	for i := range in.Candidates {
+		for k := i + 1; k < len(in.Candidates); k++ {
 			p := len(rep.Pairs)
-			a, b := perm[i], perm[k]
 			rep.Pairs = append(rep.Pairs, trace.JudgePair{
-				Pair:    []string{in.Candidates[a].ID, in.Candidates[b].ID},
+				Pair:    []string{in.Candidates[i].ID, in.Candidates[k].ID},
 				Orders:  []trace.JudgeOrder{{}, {}},
 				Verdict: trace.VerdictDraw,
 			})
-			calls = append(calls, call{pair: p, order: "ab", first: a, second: b})
-			calls = append(calls, call{pair: p, order: "ba", first: b, second: a})
+			calls = append(calls, call{pair: p, order: "ab", first: i, second: k})
+			calls = append(calls, call{pair: p, order: "ba", first: k, second: i})
 		}
 	}
 
@@ -259,7 +273,7 @@ func (j *Judge) ask(ctx context.Context, in Input, pi prompt.JudgeInput, pair in
 			msgs = append(append([]llm.Message{}, messages...), llm.Message{Role: task.RoleUser, Content: RetryInstruction})
 			out.Retries++
 		}
-		at, answer, status := j.one(ctx, msgs, key, body, now)
+		at, answer, status := j.one(ctx, msgs, key, body, in.AllowTie, now)
 		rec.Attempts = append(rec.Attempts, at)
 		out.RequestSHA256, out.ResponseSHA256 = at.RequestSHA256, at.ResponseSHA256
 		if status == trace.JudgeCallOK {
@@ -286,7 +300,7 @@ func (j *Judge) ask(ctx context.Context, in Input, pi prompt.JudgeInput, pair in
 // RetryInstruction is the one thing appended when an answer did not parse.
 const RetryInstruction = "Return only the JSON object."
 
-func (j *Judge) one(ctx context.Context, msgs []llm.Message, key string, body map[string]json.RawMessage, now func() time.Time) (trace.JudgeAttempt, *trace.JudgeAnswer, trace.JudgeCallStatus) {
+func (j *Judge) one(ctx context.Context, msgs []llm.Message, key string, body map[string]json.RawMessage, allowTie bool, now func() time.Time) (trace.JudgeAttempt, *trace.JudgeAnswer, trace.JudgeCallStatus) {
 	at := trace.JudgeAttempt{Messages: toTraceMessages(msgs)}
 	req := llm.Request{
 		BaseURL: j.Cfg.BaseURL, APIKey: key, Model: j.Cfg.Model, Messages: msgs,
@@ -317,25 +331,13 @@ func (j *Judge) one(ctx context.Context, msgs []llm.Message, key string, body ma
 	at.ResponseSHA256 = llm.SHA256(resp.ResponseBody)
 	at.Content = resp.Content
 	at.Usage = trace.Usage{PromptTokens: resp.Usage.PromptTokens, CompletionTokens: resp.Usage.CompletionTokens}
-	answer, perr := ParseAnswer(resp.Content, j.allowTie(msgs))
+	answer, perr := ParseAnswer(resp.Content, allowTie)
 	if perr != nil {
 		at.ParseError = perr.Error()
 		return at, nil, trace.JudgeCallInvalidOutput
 	}
 	at.Parsed = answer
 	return at, answer, trace.JudgeCallOK
-}
-
-// allowTie reads the contract back off the rendered prompt rather than
-// carrying it twice: whatever the user message offered is what the parser
-// accepts.
-func (j *Judge) allowTie(msgs []llm.Message) bool {
-	for _, m := range msgs {
-		if strings.Contains(m.Content, `"choice": "A" | "B" | "tie"`) {
-			return true
-		}
-	}
-	return false
 }
 
 // extraBody merges the configured extra_body with the response format CMoA
@@ -451,28 +453,58 @@ func toTraceMessages(ms []llm.Message) []trace.Message {
 	return out
 }
 
-// Permutation returns the order the candidates are presented in and where
-// its seed came from. Without the permutation in the trace, a re-run cannot
-// be compared with the run it repeats.
-func Permutation(id trace.RunID, seed *int64, n int) ([]int, string) {
-	source := "run_id"
-	sum := sha256.Sum256([]byte(id))
-	hi, lo := binary.BigEndian.Uint64(sum[0:8]), binary.BigEndian.Uint64(sum[8:16])
-	if seed != nil {
-		source = "flag"
-		hi, lo = uint64(*seed), ^uint64(*seed)
+// clearCalls removes the judge/ call files of an attempt that left no
+// judge.json, and returns how many there were.
+func clearCalls(dir trace.Dir) (int, error) {
+	entries, err := os.ReadDir(dir.JudgeDir())
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
 	}
-	return mathrand.New(mathrand.NewPCG(hi, lo)).Perm(n), source
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir.JudgeDir(), e.Name())); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
-// Nonce is the per-selection fence label: 8 hex digits from crypto/rand, so
-// a candidate cannot guess the closing sequence and write one of its own.
-func Nonce() (string, error) {
-	var b [4]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("judge: crypto/rand: %w", err)
+// PresentationSeed returns the seed the nonce is derived from and where it
+// came from: the caller's --seed, or the run id. Either way it is recorded,
+// so a selection can be reproduced byte for byte from its trace.
+func PresentationSeed(id trace.RunID, seed *int64) (int64, string) {
+	if seed != nil {
+		return *seed, "flag"
 	}
-	return hex.EncodeToString(b[:]), nil
+	sum := sha256.Sum256([]byte(id))
+	return int64(binary.BigEndian.Uint64(sum[0:8])), "run_id"
+}
+
+// Nonce is the per-selection fence label: 8 hex digits derived from the
+// presentation seed.
+//
+// It is deliberately not from crypto/rand. The nonce has two jobs, and only
+// one of them wants unpredictability. It fences the candidate blocks, which
+// a candidate cannot defeat by guessing as long as the value is fresh per
+// selection; and it is the one token a re-run can vary, which makes
+// `--seed` a metamorphic perturbation — the same question in different
+// irrelevant bytes, whose answer ought not to change. A crypto/rand nonce
+// would make that perturbation unrepeatable, and a selection would not be
+// reproducible from its own trace. The seed itself comes from the run id
+// when the caller names none, and a run id is 8 hex from crypto/rand.
+func Nonce(seed int64) string {
+	//nolint:gosec // not a secret: a fence label, recorded in the trace.
+	r := mathrand.New(mathrand.NewPCG(uint64(seed), ^uint64(seed)))
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], uint32(r.Uint64()>>32))
+	return hex.EncodeToString(b[:])
 }
 
 // Rewrite is one change the sanitiser made.
@@ -481,38 +513,68 @@ type Rewrite struct {
 	Count int
 }
 
-// The two rewrites the sanitiser makes, named the way the trace names them.
+// The three rewrites the sanitiser makes, named the way the trace names
+// them, in the order they are applied.
 const (
-	RewriteClosingTag = "closing-tag-like sequence escaped"
 	RewriteControl    = "control characters dropped"
+	RewriteZeroWidth  = "zero-width characters dropped"
+	RewriteClosingTag = "closing-tag-like sequence escaped"
 )
 
-var closingTag = regexp.MustCompile(`(?i)</candidate`)
+// closingTag is deliberately tolerant. A candidate that wants to end its
+// own block early will not write the sequence the way the template does,
+// and a literal match would let `< /candidate` and `</ candidate` through.
+var closingTag = regexp.MustCompile(`(?i)<\s*/\s*candidate`)
 
-// Sanitize prepares one answer for a candidate block. It escapes anything
-// that looks like the block's own closing tag and drops the C0 control
-// characters other than tab and newline, and it reports what it did:
-// rewriting an answer changes what is judged, so a silent rewrite would
-// make an outcome unexplainable.
+// zeroWidth are the invisible runes a candidate can hide inside a closing
+// tag: they survive a literal comparison, render as nothing, and — before
+// the order of these two passes was fixed — were dropped *after* the escape
+// had failed to match, reconstituting the tag the escape was there to
+// break.
+func zeroWidth(r rune) bool {
+	switch r {
+	case '\u200b', '\u200c', '\u200d', '\u2060', '\ufeff':
+		return true
+	}
+	return false
+}
+
+// Sanitize prepares one answer for a candidate block, in the order that
+// makes the passes composable: the invisible characters go first, so the
+// tag escape sees the text a reader would see, and only then is anything
+// that still looks like a closing tag broken.
+//
+// It reports what it did. Rewriting an answer changes what is judged, so a
+// silent rewrite would make an outcome unexplainable — and a trace that
+// claims an escape it never applied is worse than one that claims nothing.
 func Sanitize(s string) (string, []Rewrite) {
 	var out []Rewrite
-	if n := len(closingTag.FindAllString(s, -1)); n > 0 {
-		s = closingTag.ReplaceAllStringFunc(s, func(m string) string { return `<\/` + m[2:] })
-		out = append(out, Rewrite{What: RewriteClosingTag, Count: n})
-	}
-	dropped := 0
+	controls, invisible := 0, 0
 	s = strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' {
+		switch {
+		case r == '\n' || r == '\t':
 			return r
-		}
-		if r < 0x20 || r == 0x7f {
-			dropped++
+		case r < 0x20 || r == 0x7f:
+			controls++
+			return -1
+		case zeroWidth(r):
+			invisible++
 			return -1
 		}
 		return r
 	}, s)
-	if dropped > 0 {
-		out = append(out, Rewrite{What: RewriteControl, Count: dropped})
+	if controls > 0 {
+		out = append(out, Rewrite{What: RewriteControl, Count: controls})
+	}
+	if invisible > 0 {
+		out = append(out, Rewrite{What: RewriteZeroWidth, Count: invisible})
+	}
+	if n := len(closingTag.FindAllString(s, -1)); n > 0 {
+		// Escape the opening angle bracket and leave the rest as written:
+		// the block stops looking like a closing tag without the record
+		// losing what the candidate actually said.
+		s = closingTag.ReplaceAllStringFunc(s, func(m string) string { return `<\` + m[1:] })
+		out = append(out, Rewrite{What: RewriteClosingTag, Count: n})
 	}
 	return s, out
 }
@@ -527,17 +589,22 @@ var injectionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)you\s+are\s+now`),
 	regexp.MustCompile(`(?i)system\s+prompt`),
 	regexp.MustCompile(`(?i)as\s+the\s+judge`),
-	regexp.MustCompile(`(?i)choose\s+(?:A|B)\b`),
+	// The labels are matched case-sensitively: read case-insensitively this
+	// flags "choose a library", and a flag that fires on ordinary English
+	// destroys the only question it exists to answer.
+	regexp.MustCompile(`(?i:choose\s+)(?:candidate\s+)?[AB]\b`),
 }
 
-// InjectionFlags lists, in lower case and without repeats, the
-// injection-shaped phrases the answer holds.
+// InjectionFlags lists, without repeats, the injection-shaped phrases the
+// answer holds. The text is recorded as it was written, whitespace folded:
+// the labels are case-sensitive, so lower-casing the match would print
+// "choose a" for a phrase that only fires on "choose A".
 func InjectionFlags(s string) []string {
 	seen := map[string]bool{}
 	out := []string{}
 	for _, re := range injectionPatterns {
 		for _, m := range re.FindAllString(s, -1) {
-			m = strings.ToLower(strings.Join(strings.Fields(m), " "))
+			m = strings.Join(strings.Fields(m), " ")
 			if !seen[m] {
 				seen[m] = true
 				out = append(out, m)
@@ -555,12 +622,26 @@ func ParseAnswer(content string, allowTie bool) (*trace.JudgeAnswer, error) {
 	if err != nil {
 		return nil, err
 	}
-	var a trace.JudgeAnswer
+	// Pointers, so a key that is absent is told from a key that is empty.
+	// DisallowUnknownFields catches the extra key; nothing but this catches
+	// the missing one, and an object with no reason is the format bypassing
+	// the reasoning the schema exists to force.
+	var raw struct {
+		Reason *string `json:"reason"`
+		Choice *string `json:"choice"`
+	}
 	dec := json.NewDecoder(strings.NewReader(obj))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&a); err != nil {
+	if err := dec.Decode(&raw); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
+	switch {
+	case raw.Reason == nil:
+		return nil, errors.New(`reason: is required`)
+	case raw.Choice == nil:
+		return nil, errors.New(`choice: is required`)
+	}
+	a := trace.JudgeAnswer{Reason: *raw.Reason, Choice: *raw.Choice}
 	switch a.Choice {
 	case trace.ChoiceA, trace.ChoiceB:
 	case trace.ChoiceTie:
@@ -607,55 +688,69 @@ func LastObject(s string) (string, error) {
 	return last, nil
 }
 
-// Aggregate fills the pair verdicts, the wins, the ranking and the outcome
-// of a report whose orders have been answered.
+// Aggregate fills the pair verdicts and their draw reasons, the wins, the
+// ranking and the outcome of a report whose orders have been answered.
 func Aggregate(rep *trace.JudgeReport) {
-	decided, invalid := 0, false
+	rep.DrawReasons = map[trace.DrawReason]int{}
 	for i := range rep.Pairs {
 		p := &rep.Pairs[i]
 		a, b := p.Orders[0], p.Orders[1]
-		if a.Status == trace.JudgeCallInvalidOutput || b.Status == trace.JudgeCallInvalidOutput {
-			invalid = true
-		}
-		// The conservative rule: a win needs both orders, and any tie or
-		// disagreement is a draw. A pair the swap did not survive is not
-		// evidence, and treating it as one is how a coin flip becomes a
-		// decision.
 		// Consistency is about the candidate, not the label: choosing A in
 		// one order and B in the other is the same answer twice, and
 		// choosing A in both is the position speaking.
 		if a.Status == trace.JudgeCallOK && b.Status == trace.JudgeCallOK && a.ChoiceCandidate == b.ChoiceCandidate {
 			rep.SwapConsistentPairs++
 		}
-		if a.Status != trace.JudgeCallOK || b.Status != trace.JudgeCallOK {
-			continue
-		}
-		if a.ChoiceCandidate != "" && a.ChoiceCandidate == b.ChoiceCandidate {
+		// The conservative rule: a win needs both orders, and any tie or
+		// disagreement is a draw. A pair the swap did not survive is not
+		// evidence, and treating it as one is how a coin flip becomes a
+		// decision.
+		if a.Status == trace.JudgeCallOK && b.Status == trace.JudgeCallOK &&
+			a.ChoiceCandidate != "" && a.ChoiceCandidate == b.ChoiceCandidate {
 			p.Verdict = a.ChoiceCandidate
 			rep.Wins[p.Verdict]++
-			decided++
+			continue
 		}
+		p.DrawReason = drawReason(a, b)
+		rep.DrawReasons[p.DrawReason]++
 	}
 	rep.Ranked = ranked(rep.Candidates, rep.Wins)
-	rep.Outcome = outcome(rep, decided, invalid)
+	rep.Outcome = outcome(rep)
 }
 
-func outcome(rep *trace.JudgeReport, decided int, invalid bool) trace.JudgeOutcome {
-	for _, p := range rep.Pairs {
-		for _, o := range p.Orders {
-			switch o.Status {
-			case trace.JudgeCallTimeout:
-				return trace.JudgeOutcome{Kind: trace.SelectionJudgeTimeout, Reason: "the judge did not answer in time"}
-			case trace.JudgeCallError, trace.JudgeCallOK, trace.JudgeCallInvalidOutput:
-			}
+// drawReason says why one pair produced no winner, most severe first: a
+// pair nobody asked outranks a pair nobody could parse, which outranks an
+// abstention, which outranks a contradiction.
+func drawReason(a, b trace.JudgeOrder) trace.DrawReason {
+	for _, o := range []trace.JudgeOrder{a, b} {
+		switch o.Status {
+		case trace.JudgeCallTimeout, trace.JudgeCallError:
+			return trace.DrawUnmeasured
+		case trace.JudgeCallOK, trace.JudgeCallInvalidOutput:
 		}
 	}
-	for _, p := range rep.Pairs {
-		for _, o := range p.Orders {
-			if o.Status == trace.JudgeCallError {
-				return trace.JudgeOutcome{Kind: trace.SelectionJudgeFailed, Reason: o.Error}
-			}
-		}
+	if a.Status == trace.JudgeCallInvalidOutput || b.Status == trace.JudgeCallInvalidOutput {
+		return trace.DrawInvalid
+	}
+	if a.Choice == trace.ChoiceTie || b.Choice == trace.ChoiceTie {
+		return trace.DrawTie
+	}
+	return trace.DrawDisagree
+}
+
+// outcome reads the wins first and only then asks whether a failed call
+// mattered.
+//
+// A pair that was never answered does not discard a winner it could not
+// have unseated: if one candidate has already beaten every other, no answer
+// to the pair between two losers can change that, and returning
+// judge_timeout there would throw away a selection the judge did make. The
+// failure is escalated only when the missing answers could still decide the
+// outcome — that is, when some candidate could still reach a clean sweep if
+// every unanswered pair went its way.
+func outcome(rep *trace.JudgeReport) trace.JudgeOutcome {
+	if len(rep.Candidates) < 2 {
+		return trace.JudgeOutcome{Kind: trace.SelectionNoCandidate, Reason: string(trace.ReasonTooFewCandidates)}
 	}
 	// A Condorcet winner beats every other candidate; with n candidates
 	// that is n-1 pairs, and there can be at most one.
@@ -673,19 +768,84 @@ func outcome(rep *trace.JudgeReport, decided int, invalid bool) trace.JudgeOutco
 			Reason:      fmt.Sprintf("condorcet winner, %d of %d pairs agreed under both orders", need, len(rep.Pairs)),
 		}
 	}
+	if o := escalate(rep, need); o != nil {
+		return *o
+	}
+	decided, unmeasured, invalid := 0, 0, 0
+	for _, p := range rep.Pairs {
+		switch p.DrawReason {
+		case "":
+			decided++
+		case trace.DrawUnmeasured:
+			unmeasured++
+		case trace.DrawInvalid:
+			invalid++
+		case trace.DrawTie, trace.DrawDisagree:
+		}
+	}
 	reason := trace.ReasonNoMajority
 	switch {
-	case invalid:
+	case invalid > 0:
 		reason = trace.ReasonInvalidOutput
 	case decided == 0 && len(rep.Pairs) > 1:
+		// A union: every pair failed to decide, whether by tie, by
+		// contradiction under swap, or because it was never measured.
+		// pairs[].draw_reason is where the split lives.
 		reason = trace.ReasonAllDraws
-	case decided == len(rep.Pairs):
+	case decided+unmeasured == len(rep.Pairs) && unmeasured == 0:
 		// Every pair was decided and still nobody beat everybody: the wins
 		// run in a circle, which is a property of the judge, not of a
 		// missing answer.
 		reason = trace.ReasonCycle
 	}
 	return trace.JudgeOutcome{Kind: trace.SelectionNoCandidate, Reason: string(reason)}
+}
+
+// escalate returns judge_timeout or judge_failed when the pairs that were
+// never answered could still have produced a winner, and nil when they
+// could not. A timeout outranks a transport error: it is the one a caller
+// retries.
+func escalate(rep *trace.JudgeReport, need int) *trace.JudgeOutcome {
+	missing := map[string]int{}
+	var timedOut, failed *trace.JudgeOrder
+	for i := range rep.Pairs {
+		p := &rep.Pairs[i]
+		if p.DrawReason != trace.DrawUnmeasured {
+			continue
+		}
+		for _, id := range p.Pair {
+			missing[id]++
+		}
+		for k := range p.Orders {
+			switch p.Orders[k].Status {
+			case trace.JudgeCallTimeout:
+				if timedOut == nil {
+					timedOut = &p.Orders[k]
+				}
+			case trace.JudgeCallError:
+				if failed == nil {
+					failed = &p.Orders[k]
+				}
+			case trace.JudgeCallOK, trace.JudgeCallInvalidOutput:
+			}
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	couldDecide := false
+	for _, id := range rep.Candidates {
+		if rep.Wins[id]+missing[id] >= need {
+			couldDecide = true
+		}
+	}
+	if !couldDecide {
+		return nil
+	}
+	if timedOut != nil {
+		return &trace.JudgeOutcome{Kind: trace.SelectionJudgeTimeout, Reason: "the judge did not answer in time"}
+	}
+	return &trace.JudgeOutcome{Kind: trace.SelectionJudgeFailed, Reason: failed.Error}
 }
 
 // ranked orders the candidates by wins, breaking ties by the caller's
