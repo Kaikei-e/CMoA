@@ -161,7 +161,8 @@ Without `--harness` the check is the one `task.json` already made.
 | `status` | `ok` (a diff was extracted, or an answer arrived), `http_error`, `timeout`, `malformed` (2xx but not a chat completion), `no_diff` (coding face: a completion with no unified diff in it), `empty` (chat face: a completion with no text in it) |
 | `face`, `origin` | the run's face; `origin` is `external` for an answer `cmoa judge` was handed |
 | `error` | the error text for anything but `ok` |
-| `finish_reason`, `usage.prompt_tokens`, `usage.completion_tokens` | as the server reported |
+| `finish_reason`, `usage.prompt_tokens`, `usage.completion_tokens` | as the server reported. `usage.reasoning_tokens` comes from `completion_tokens_details` and is **part of** `completion_tokens`, not additional to it |
+| `reasoning_bytes` | how much of the completion was reasoning rather than answer: the server's `reasoning_content`, or the `<think>` block CMoA stripped out of the content. A proposer that spent its whole budget thinking is `empty` with `finish_reason: length` and a large `reasoning_bytes`, which is a different failure from one that answered nothing — and `completion_tokens` alone cannot tell them apart |
 | `timings.request_ms` | measured by CMoA; `server_prompt_ms`, `server_predicted_ms`, `tokens_per_second` come from llama-server's `timings` and are absent on other servers |
 | `diff` | coding face: `files`, `additions`, `deletions`, `sha256` of the `.diff` file; only when `status` is `ok` |
 | `answer_sha256`, `answer_bytes` | chat face: of the `.txt` file; only when `status` is `ok` |
@@ -363,6 +364,10 @@ inside a call; which candidate is which is only in the trace.
 }
 ```
 
+An order's `latency_ms` is the wall clock of its call, both attempts
+included when the first did not parse; each attempt's own share is in the
+call file.
+
 `verdict` is a candidate id or `draw`. An order's `status` is `ok`,
 `invalid_output` (still unparsable after the one retry), `timeout` or
 `error` (HTTP or decode failure). One `timeout` makes the whole outcome
@@ -407,9 +412,11 @@ The candidate blocks in the prompt are fenced with a per-selection nonce:
 `judge.output_format` is `json_schema` (the default) or `none`. With
 `json_schema` CMoA sends an OpenAI `response_format` naming an object with
 `reason` (a string of at most 400 characters) then `choice` (the enum
-`A`, `B`, and `tie` when the task allows one). The key order is the
-schema's: the reason is written before the choice, so the choice cannot be
-reached without passing through it.
+`A`, `B`, and `tie` when the task allows one). **The properties are listed
+in that order on the wire**, because a server emits them in schema order:
+the reason is written before the choice, so the choice cannot be reached
+without passing through it. A pinned test asserts the ordering of the
+encoded request, since a Go map would have sorted `choice` first.
 
 CMoA never sends a raw GBNF `grammar`. A server with its own structured
 chat format parses a raw grammar beside that format rather than composing

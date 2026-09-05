@@ -215,14 +215,20 @@ func (j *Judge) finish(rep *trace.JudgeReport, started time.Time, now func() tim
 }
 
 // ask performs one call, with the single retry a malformed answer earns.
-func (j *Judge) ask(ctx context.Context, in Input, pi prompt.JudgeInput, pair int, order, first, second string, now func() time.Time) (*trace.JudgeCall, trace.JudgeOrder) {
-	rec := &trace.JudgeCall{
+//
+// The results are named: the latency is filled in by a deferred function,
+// and an unnamed result would be copied out of the function before that
+// function ran, leaving every order in judge.json at zero.
+func (j *Judge) ask(ctx context.Context, in Input, pi prompt.JudgeInput, pair int, order, first, second string, now func() time.Time) (rec *trace.JudgeCall, out trace.JudgeOrder) {
+	rec = &trace.JudgeCall{
 		SchemaVersion: trace.SchemaVersion, RunID: in.RunID, Pair: pair, Order: order,
 		First: first, Second: second, Model: j.Cfg.Model, BaseURL: j.Cfg.BaseURL,
 	}
-	out := trace.JudgeOrder{First: first, Second: second, File: trace.JudgeCallName(pair, order)}
+	out = trace.JudgeOrder{First: first, Second: second, File: trace.JudgeCallName(pair, order)}
 	started := now()
 	defer func() {
+		// The call's own wall clock, which covers both attempts when the
+		// first did not parse. Each attempt's share is in the call file.
 		rec.LatencyMS = now().Sub(started).Milliseconds()
 		out.LatencyMS = rec.LatencyMS
 	}()
@@ -350,22 +356,23 @@ func (j *Judge) extraBody(allowTie bool) (map[string]json.RawMessage, error) {
 	if allowTie {
 		choices = append(choices, trace.ChoiceTie)
 	}
-	format := map[string]any{
-		"type": "json_schema",
-		"json_schema": map[string]any{
-			"name":   "verdict",
-			"strict": true,
-			"schema": map[string]any{
-				"type": "object",
-				// The key order is the schema's order: the reason is
-				// written before the choice, so a model cannot reach the
-				// choice without passing through its own reasons for it.
-				"properties": map[string]any{
-					"reason": map[string]any{"type": "string", "maxLength": MaxReasonChars},
-					"choice": map[string]any{"type": "string", "enum": choices},
+	// Structs, not maps: encoding/json writes map keys in sorted order,
+	// which would put "choice" before "reason" in the schema and so in the
+	// answer. The reason must be written first, or the choice is reached
+	// without passing through it.
+	format := responseFormat{
+		Type: "json_schema",
+		JSONSchema: jsonSchema{
+			Name:   "verdict",
+			Strict: true,
+			Schema: verdictSchema{
+				Type: "object",
+				Properties: verdictProperties{
+					Reason: schemaField{Type: "string", MaxLength: MaxReasonChars},
+					Choice: schemaField{Type: "string", Enum: choices},
 				},
-				"required":             []string{"reason", "choice"},
-				"additionalProperties": false,
+				Required:             []string{"reason", "choice"},
+				AdditionalProperties: false,
 			},
 		},
 	}
@@ -375,6 +382,39 @@ func (j *Judge) extraBody(allowTie bool) (map[string]json.RawMessage, error) {
 	}
 	body["response_format"] = b
 	return body, nil
+}
+
+// The judge's answer schema, as structs so the field order is the wire
+// order. Nothing here is read back: it is written into the request and
+// recorded in the call file.
+type responseFormat struct {
+	Type       string     `json:"type"`
+	JSONSchema jsonSchema `json:"json_schema"`
+}
+
+type jsonSchema struct {
+	Name   string        `json:"name"`
+	Strict bool          `json:"strict"`
+	Schema verdictSchema `json:"schema"`
+}
+
+type verdictSchema struct {
+	Type                 string            `json:"type"`
+	Properties           verdictProperties `json:"properties"`
+	Required             []string          `json:"required"`
+	AdditionalProperties bool              `json:"additionalProperties"`
+}
+
+// verdictProperties fixes the order: reason, then choice.
+type verdictProperties struct {
+	Reason schemaField `json:"reason"`
+	Choice schemaField `json:"choice"`
+}
+
+type schemaField struct {
+	Type      string   `json:"type"`
+	MaxLength int      `json:"maxLength,omitempty"`
+	Enum      []string `json:"enum,omitempty"`
 }
 
 // MaxReasonChars bounds the rationale. A short one is deliberate: a long

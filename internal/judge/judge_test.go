@@ -1,6 +1,7 @@
 package judge
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -646,5 +647,115 @@ func TestNonceReachesThePrompt(t *testing.T) {
 	}
 	if !strings.Contains(string(b), rep.Presentation.Nonce) {
 		t.Error("the nonce in judge.json must be the one the call used")
+	}
+}
+
+// The reason must be listed before the choice in the schema CMoA sends: a
+// server emits the properties in schema order, and a choice reached without
+// passing through a reason is the format bypassing the reasoning. An
+// encoding that used a Go map would sort the keys and put "choice" first.
+func TestSchemaListsReasonBeforeChoice(t *testing.T) {
+	f := &fakeJudge{t: t, script: map[order]string{
+		{"a", "b"}: trace.ChoiceA, {"b", "a"}: trace.ChoiceB,
+	}}
+	j, dir := fixture(t, f)
+	if _, err := j.Run(t.Context(), input("a", "b")); err != nil {
+		t.Fatal(err)
+	}
+	var call trace.JudgeCall
+	b, err := os.ReadFile(dir.JudgeCallFile(0, "ab"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &call); err != nil {
+		t.Fatal(err)
+	}
+	// The trace re-indents the body it recorded; the order survives that,
+	// the whitespace does not.
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, call.Attempts[0].Request); err != nil {
+		t.Fatal(err)
+	}
+	body := compact.String()
+	format := body[strings.Index(body, `"response_format"`):]
+	reason, choice := strings.Index(format, `"reason"`), strings.Index(format, `"choice"`)
+	if reason < 0 || choice < 0 {
+		t.Fatalf("the schema names neither property:\n%s", format)
+	}
+	if reason > choice {
+		t.Errorf("the schema lists choice before reason:\n%s", format)
+	}
+	// The required list carries the same order, and the enum matches the
+	// task's allow_tie.
+	if !strings.Contains(format, `"required":["reason","choice"]`) {
+		t.Errorf("required is not [reason choice]:\n%s", format)
+	}
+	if !strings.Contains(format, `"enum":["A","B","tie"]`) {
+		t.Errorf("the enum does not offer a tie:\n%s", format)
+	}
+	if !strings.Contains(format, `"maxLength":400`) {
+		t.Errorf("the reason is unbounded:\n%s", format)
+	}
+	// A task that forbids a tie drops it from the enum.
+	in := input("a", "b")
+	in.AllowTie = false
+	j2, dir2 := fixture(t, &fakeJudge{t: t, script: f.script})
+	if _, err := j2.Run(t.Context(), in); err != nil {
+		t.Fatal(err)
+	}
+	b, err = os.ReadFile(dir2.JudgeCallFile(0, "ab"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact.Reset()
+	if err := json.Compact(&compact, mustRequest(t, b)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(compact.String(), `"enum":["A","B","tie"]`) {
+		t.Error("allow_tie false must drop tie from the schema enum")
+	}
+}
+
+// mustRequest reads the first attempt's request body out of a call file.
+func mustRequest(t *testing.T, callFile []byte) json.RawMessage {
+	t.Helper()
+	var call trace.JudgeCall
+	if err := json.Unmarshal(callFile, &call); err != nil {
+		t.Fatal(err)
+	}
+	return call.Attempts[0].Request
+}
+
+// Every order in judge.json carries the latency of its own call. It was
+// zero once, because the value was assigned to an unnamed result after the
+// caller had already been handed a copy.
+func TestOrderLatencyIsRecorded(t *testing.T) {
+	f := &fakeJudge{t: t, delay: 15 * time.Millisecond, script: map[order]string{
+		{"a", "b"}: trace.ChoiceA, {"b", "a"}: trace.ChoiceB,
+	}}
+	j, dir := fixture(t, f)
+	rep, err := j.Run(t.Context(), input("a", "b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range rep.Pairs[0].Orders {
+		if o.LatencyMS <= 0 {
+			t.Errorf("order %s/%s: latency_ms %d", o.First, o.Second, o.LatencyMS)
+		}
+	}
+	// The call file agrees with the report, and covers its own attempt.
+	var call trace.JudgeCall
+	b, err := os.ReadFile(dir.JudgeCallFile(0, "ab"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &call); err != nil {
+		t.Fatal(err)
+	}
+	if call.LatencyMS != rep.Pairs[0].Orders[0].LatencyMS {
+		t.Errorf("judge.json says %d, the call file says %d", rep.Pairs[0].Orders[0].LatencyMS, call.LatencyMS)
+	}
+	if call.LatencyMS < call.Attempts[0].LatencyMS {
+		t.Errorf("a call is at least as long as its attempt: %d < %d", call.LatencyMS, call.Attempts[0].LatencyMS)
 	}
 }
