@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kaikei-e/CMoA/internal/band"
 	"github.com/Kaikei-e/CMoA/internal/config"
 	"github.com/Kaikei-e/CMoA/internal/patch"
 	"github.com/Kaikei-e/CMoA/internal/task"
@@ -44,7 +45,9 @@ var labelPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 // cmdVerify verifies one diff against the task's revision and prints a
 // single trace.Verification on stdout. It is select's inner loop without a
 // run: nothing is written under <task>/runs, no proposer is asked, and no
-// cmoa.json is read unless --config names one.
+// cmoa.json is read unless --config names one. Both verify kinds are run
+// here; only verify reads a band, because only verify is asked about a diff
+// somebody else chose.
 func cmdVerify(ctx context.Context, args []string, stdout, stderr io.Writer, logf func(string, ...any)) int {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -72,12 +75,6 @@ func cmdVerify(ctx context.Context, args []string, stdout, stderr io.Writer, log
 	t, err := task.Load(*taskDir)
 	if err != nil {
 		fmt.Fprintln(stderr, "cmoa:", err)
-		return exitUsage
-	}
-	switch t.Verify.Kind {
-	case task.KindExitCode:
-	case task.KindBand:
-		fmt.Fprintln(stderr, "cmoa: verify.kind band is not implemented")
 		return exitUsage
 	}
 	to, code := verifyTimeout(*timeout, t, *cfgPath, stderr)
@@ -199,16 +196,53 @@ func verifyDiff(ctx context.Context, t *task.Task, rev, diff, label string, to t
 	}
 	res.Command = out.Command
 	res.ExitCode = out.ExitCode
-	switch {
-	case out.TimedOut:
+	if out.TimedOut {
 		res.Status = trace.VerifyTimeout
-	case out.ExitCode == 0:
-		res.Status = trace.VerifyPass
-	default:
-		res.Status = trace.VerifyFail
+	} else {
+		judge(t.Verify.Kind, res, out.Stdout)
 	}
 	logf("%s: %s (exit %d, %s)", label, res.Status, out.ExitCode, out.Duration.Round(time.Millisecond))
+	if res.Band != nil {
+		logf("%s: band judged %d, failed %d, skipped %d", label, res.Band.Judged, len(res.Band.Failed), len(res.Band.Skipped))
+	}
 	return res, out.Stdout, out.Stderr
+}
+
+// judge reads the verifier's answer in the vocabulary of its kind and sets
+// res.Status. An exit-code verifier answers with its exit status. A band
+// verifier answers with the gate CSV it printed: any invariant outside its
+// band is this candidate's `fail`, while a container that exited non-zero
+// with every band held is a broken harness — a `runner_error`, which says
+// nothing about the code under test (ADR-0005's distinction).
+func judge(kind task.VerifyKind, res *trace.VerifyResult, stdout []byte) {
+	switch kind {
+	case task.KindExitCode:
+		if res.ExitCode == 0 {
+			res.Status = trace.VerifyPass
+			return
+		}
+		res.Status = trace.VerifyFail
+	case task.KindBand:
+		b, err := band.Parse(stdout)
+		if err != nil {
+			res.Status = trace.VerifyRunnerError
+			res.Error = err.Error()
+			return
+		}
+		res.Band = b
+		switch {
+		case len(b.Failed) > 0:
+			res.Status = trace.VerifyFail
+		case res.ExitCode != 0:
+			res.Status = trace.VerifyRunnerError
+			res.Error = fmt.Sprintf("band verifier exited %d with no failing invariant", res.ExitCode)
+		default:
+			// Skipped invariants do not withhold a pass: an invariant the
+			// gate could not measure is the gate's business, not the
+			// candidate's.
+			res.Status = trace.VerifyPass
+		}
+	}
 }
 
 // verifyTimeout resolves the verifier timeout: the flag, then the task's

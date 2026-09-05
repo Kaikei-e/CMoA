@@ -78,12 +78,69 @@ if the result still cannot be written afterwards, the status becomes
 | `status` | as in `verify/<id>/result.json` above, minus `skipped`: `pass`, `fail`, `apply_failed`, `timeout`, `runner_error` |
 | `exit_code`, `duration_ms`, `command`, `project_name` | the compose invocation |
 | `apply_error`, `error` | text when relevant; absent when empty. Without `--out`, a `runner_error` folds the tail of the container's stderr into `error` |
+| `band` | only for a `verify.kind: band` task; see below. Absent for an `exit-code` verifier |
 | `started_at`, `finished_at` | UTC |
 | `cmoa_version` | the binary that produced it |
 
 The process exit code is 0 when the status is `pass`, 1 when the verifier
 answered no (`fail`, `apply_failed`, `timeout`), 2 on a usage or task error
 (nothing is printed on stdout), 3 on `runner_error`.
+
+The diff named by `--diff` may be an empty file. It verifies the revision
+unchanged, which is how a task's seed state is shown to fail — and, when the
+task's `reference.diff` is itself empty, how a reference solution that *is*
+the tree at `rev` is verified.
+
+### band verifiers
+
+A task whose `task.json` sets `verify.kind: band` is judged on what the
+container printed, not on its exit code. Such a verifier measures
+invariants — a latency, a throughput, an allocation count — and each has a
+band it must fall inside; an exit code cannot say which one moved.
+
+The contract is one CSV block on stdout whose header line is exactly
+
+```
+invariant,value,ci_half,band_lo,band_hi,verdict
+```
+
+followed by one row per invariant. `verdict` is `pass`, `fail`, `skipped` or
+`info`; the four numbers may be empty, which a `skipped` or `info` row
+normally leaves them. Every other line on stdout is the container's own
+logging and is ignored, so a gate need not keep its output clean. The block
+ends at the first line that is not a six-field CSV record. If several blocks
+appear, the **last** one is read: a gate that re-measures prints the run that
+counts last.
+
+| status | when |
+| --- | --- |
+| `fail` | at least one row has `verdict: fail`, whatever the container exited |
+| `pass` | rows were read and none failed, and the container exited 0. `skipped` rows do not withhold a pass |
+| `runner_error` | no header line, a header with no rows under it, or a row that does not parse (`error`: "band verifier printed no gate CSV" / "... a malformed gate CSV"); or every band held and the container still exited non-zero (`error` carries the code) — the harness broke, which says nothing about the code under test |
+| `apply_failed`, `timeout` | as for an `exit-code` verifier |
+
+`exit_code` stays the container's in every case.
+
+```json
+"band": {
+  "judged": 1,
+  "failed": [],
+  "skipped": ["tail_alloc_bytes"],
+  "rows": [
+    {"invariant": "p99_latency_ms", "value": 12.5, "ci_half": 0.4, "band_lo": 0, "band_hi": 15, "verdict": "pass"},
+    {"invariant": "tail_alloc_bytes", "value": null, "ci_half": null, "band_lo": null, "band_hi": null, "verdict": "skipped"}
+  ]
+}
+```
+
+`judged` counts the rows a band was actually applied to (`pass` plus
+`fail`); `failed` and `skipped` name those rows; `rows` keeps every row in
+the order it was printed, `info` rows included. A number the verifier left
+empty is `null`, which is "not measured" — not a measurement of zero.
+
+`cmoa select` refuses a band task with exit 3: a banded gate measures, and
+CMoA has no way to propose candidates against a measurement yet. Band tasks
+are verified one diff at a time, by the layer above.
 
 ## select.json
 

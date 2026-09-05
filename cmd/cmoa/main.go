@@ -171,6 +171,16 @@ func cmdSelect(ctx context.Context, args []string, stdout, stderr io.Writer, log
 	if code != exitOK {
 		return code
 	}
+	// A band verifier measures; it does not answer yes or no about a diff
+	// nobody asked it about. Proposing candidates for one is a task design
+	// that does not exist yet, so select refuses it rather than reading the
+	// container's exit code as a verdict it does not carry.
+	switch t.Verify.Kind {
+	case task.KindExitCode:
+	case task.KindBand:
+		fmt.Fprintf(stderr, "cmoa: task %s declares verify.kind band; select judges candidates on exit-code verifiers only. Use cmoa verify for one diff.\n", t.ID)
+		return exitInvalid
+	}
 	var dir trace.Dir
 	var err error
 	if *runDir != "" {

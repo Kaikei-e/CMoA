@@ -117,5 +117,9 @@ and it has to measure the same verifier that `select` uses, not a second impleme
 compose file under a unique project name) and prints one JSON object; unlike `select`, its exit code
 follows the result, because the caller is uzushio and the judgement is uzushio's. `task.json` gains a
 version 2 with the reference solution, the mutants and the doctor's thresholds; CMoA reads them and
-computes nothing from them. `verify.kind: band` is reserved for a banded grader and refused until one
-exists.
+computes nothing from them — the reference diff may even be empty, which says the tree at `rev`
+already is the solution. It also gains `verify.kind: band`, for a gate that measures rather than
+answers: such a verifier prints a CSV of invariants, values and their bands, and one row outside its
+band is the candidate's `fail`, while a container that exits non-zero with every band held is a
+`runner_error` — the harness broke, and that is not a fact about the code. `select` refuses a band
+task outright; a measurement is not something the pool can be asked to satisfy.

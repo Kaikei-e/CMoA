@@ -84,6 +84,41 @@ const (
 	VerifySkipped     VerifyStatus = "skipped"      // candidate status was not ok
 )
 
+// BandVerdict is what a banded verifier said about one invariant. The
+// vocabulary is the verifier's, not CMoA's: CMoA reads the words and maps
+// them onto a VerifyStatus.
+type BandVerdict string
+
+const (
+	BandPass    BandVerdict = "pass"    // the measurement fell inside the band
+	BandFail    BandVerdict = "fail"    // it fell outside
+	BandSkipped BandVerdict = "skipped" // the invariant was not measured
+	BandInfo    BandVerdict = "info"    // measured, but no band was declared
+)
+
+// BandRow is one invariant as the gate CSV reported it. The four numbers
+// are null when the verifier left the field empty, which a skipped or info
+// row does: null is "not measured", 0 is a measurement of zero.
+type BandRow struct {
+	Invariant string      `json:"invariant"`
+	Value     *float64    `json:"value"`
+	CIHalf    *float64    `json:"ci_half"`
+	BandLo    *float64    `json:"band_lo"`
+	BandHi    *float64    `json:"band_hi"`
+	Verdict   BandVerdict `json:"verdict"`
+}
+
+// Band is a banded verifier's answer, parsed from the gate CSV it printed.
+// Judged counts the rows a band was actually applied to (pass and fail);
+// Failed and Skipped name those rows, and Rows keeps every row in the order
+// it was printed, info rows included.
+type Band struct {
+	Judged  int       `json:"judged"`
+	Failed  []string  `json:"failed"`
+	Skipped []string  `json:"skipped"`
+	Rows    []BandRow `json:"rows"`
+}
+
 // SelectionKind mirrors the sealed Selection type in internal/selection.
 type SelectionKind string
 
@@ -218,6 +253,7 @@ type VerifyResult struct {
 	ProjectName string       `json:"project_name,omitempty"`
 	ApplyError  string       `json:"apply_error,omitempty"`
 	Error       string       `json:"error,omitempty"`
+	Band        *Band        `json:"band,omitempty"` // only a verify.kind band verifier
 	StartedAt   time.Time    `json:"started_at"`
 	FinishedAt  time.Time    `json:"finished_at"`
 }
