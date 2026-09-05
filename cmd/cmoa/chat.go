@@ -101,8 +101,8 @@ func cmdJudge(ctx context.Context, args []string, stdout, stderr io.Writer, logf
 	harnessDir := fs.String("harness", "", "rendered harness directory (default: none)")
 	seed := fs.Int64("seed", 0, "presentation seed: it permutes the candidates, never the judge's sampling")
 	judgeSeed := fs.Int64("judge-seed", 0, "override the judge's own sampling seed")
-	if err := fs.Parse(args); err != nil {
-		return exitUsage
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })

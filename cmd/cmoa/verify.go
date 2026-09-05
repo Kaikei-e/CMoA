@@ -57,8 +57,8 @@ func cmdVerify(ctx context.Context, args []string, stdout, stderr io.Writer, log
 	timeout := fs.Duration("timeout", 0, "verifier timeout (default: the task's, then the config's, then none)")
 	label := fs.String("label", "", "name for this verification, "+labelPattern.String()+" (default: 8 hex digits)")
 	cfgPath := fs.String("config", "", "cmoa.json to take verify.timeout_seconds from; the whole file must be valid")
-	if err := fs.Parse(args); err != nil {
-		return exitUsage
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	if *taskDir == "" || *diffPath == "" {
 		fmt.Fprintln(stderr, "cmoa: verify needs --task and --diff")

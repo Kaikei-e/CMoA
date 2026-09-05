@@ -22,8 +22,8 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer, logf func(st
 	harnessDir := fs.String("harness", "", "rendered harness directory (default: none)")
 	asOf := fs.String("as-of", "", "day the harness is read for, YYYY-MM-DD (default today)")
 	allowRemote := fs.Bool("allow-remote", false, "allow binding an address that is not loopback; cmoa serve has no auth")
-	if err := fs.Parse(args); err != nil {
-		return exitUsage
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })

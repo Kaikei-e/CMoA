@@ -127,6 +127,19 @@ func version() string {
 	return "dev"
 }
 
+// parseArgs parses a subcommand's flags. --help prints the usage and exits 0,
+// the convention every caller of a CLI relies on to ask "does this command
+// exist?"; any other parse error is a usage error (2).
+func parseArgs(fs *flag.FlagSet, args []string) (code int, done bool) {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return exitOK, true
+		}
+		return exitUsage, true
+	}
+	return exitOK, false
+}
+
 func loadAll(flagConfig, taskDir string, stderr io.Writer, logf func(string, ...any)) (*config.Config, *task.Task, int) {
 	if taskDir == "" {
 		fmt.Fprintln(stderr, "cmoa: --task is required")
@@ -163,8 +176,8 @@ func cmdPropose(ctx context.Context, args []string, stdout, stderr io.Writer, lo
 	harnessDir := fs.String("harness", "", "rendered harness directory (default: none)")
 	seed := fs.Int64("seed", 0, "override every proposer's seed (pair with --temperature)")
 	temperature := fs.Float64("temperature", 0, "override every proposer's temperature (pair with --seed)")
-	if err := fs.Parse(args); err != nil {
-		return exitUsage
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
@@ -236,8 +249,8 @@ func cmdSelect(ctx context.Context, args []string, stdout, stderr io.Writer, log
 	taskDir := fs.String("task", "", "task directory")
 	cfgPath := fs.String("config", "", "cmoa.json (default: $CMOA_CONFIG, <task>/cmoa.json, ./cmoa.json)")
 	runDir := fs.String("run", "", "run directory (default: the latest under <task>/runs)")
-	if err := fs.Parse(args); err != nil {
-		return exitUsage
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	cfg, t, code := loadAll(*cfgPath, *taskDir, stderr, logf)
 	if code != exitOK {
@@ -294,8 +307,8 @@ func cmdSurfaces(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("surfaces", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	format := fs.String("format", "text", "text or json")
-	if err := fs.Parse(args); err != nil {
-		return exitUsage
+	if code, done := parseArgs(fs, args); done {
+		return code
 	}
 	type row struct {
 		Surface  cmoa.Surface  `json:"surface"`
