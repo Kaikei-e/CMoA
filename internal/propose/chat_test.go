@@ -193,3 +193,48 @@ func TestExternal(t *testing.T) {
 		t.Error("External must refuse the coding face")
 	}
 }
+
+// A proposer that spends its whole budget on reasoning answers `empty`,
+// and the trace must say so: the finish reason, the reasoning tokens and
+// the reasoning bytes together tell "thought the budget away" from "said
+// nothing", which completion_tokens alone cannot.
+func TestReasoningIsAccountedFor(t *testing.T) {
+	tk, vault := chatFixture(t)
+	thoughtful := proposer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{
+				"content": "", "reasoning_content": strings.Repeat("thinking. ", 40),
+			}, "finish_reason": "length"}},
+			"usage": map[string]any{
+				"prompt_tokens": 50, "completion_tokens": 4096,
+				"completion_tokens_details": map[string]int{"reasoning_tokens": 4096},
+			},
+		})
+	})
+	// A server that does not separate reasoning leaves a think block in the
+	// content instead; the same quantity is the difference between the raw
+	// and the stripped text.
+	inline := proposer(t, reply("<think>weighing it up</think>the answer"))
+	cfg := chatConfig(t, vault, `{"id":"thoughtful","base_url":"`+thoughtful+`","model":"m1"},{"id":"inline","base_url":"`+inline+`","model":"m2"}`)
+	dir, err := Run(context.Background(), cfg, tk, Options{Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := dir.ReadCandidate("thoughtful")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Status != trace.CandidateEmpty || c.FinishReason != "length" {
+		t.Fatalf("%+v", c)
+	}
+	if c.Usage.ReasoningTokens != 4096 || c.ReasoningBytes != 400 {
+		t.Errorf("reasoning tokens %d, bytes %d", c.Usage.ReasoningTokens, c.ReasoningBytes)
+	}
+	i, err := dir.ReadCandidate("inline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i.Status != trace.CandidateOK || i.ReasoningBytes != len("<think>weighing it up</think>") {
+		t.Errorf("%+v (reasoning %d)", i, i.ReasoningBytes)
+	}
+}

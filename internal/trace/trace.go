@@ -289,8 +289,15 @@ type Candidate struct {
 	Error        string          `json:"error,omitempty"`
 	FinishReason string          `json:"finish_reason,omitempty"`
 	Usage        Usage           `json:"usage"`
-	Timings      Timings         `json:"timings"`
-	Diff         *DiffStats      `json:"diff,omitempty"` // coding face, only when Status == ok
+	// ReasoningBytes is how much of the completion was reasoning rather
+	// than answer: the server's reasoning_content, or the <think> block
+	// CMoA stripped out of the content. A model that spent its whole
+	// budget thinking answers `empty` with a large number here, which is a
+	// different failure from a model that answered nothing — and
+	// completion_tokens alone cannot tell the two apart.
+	ReasoningBytes int        `json:"reasoning_bytes,omitempty"`
+	Timings        Timings    `json:"timings"`
+	Diff           *DiffStats `json:"diff,omitempty"` // coding face, only when Status == ok
 	// The chat face, only when Status == ok.
 	AnswerSHA256   string             `json:"answer_sha256,omitempty"`
 	AnswerBytes    int                `json:"answer_bytes,omitempty"`
@@ -317,9 +324,11 @@ type CandidateMetadata struct {
 }
 
 // Usage is the token accounting the server reported (zero when absent).
+// ReasoningTokens is part of CompletionTokens, not additional to it.
 type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
+	ReasoningTokens  int `json:"reasoning_tokens,omitempty"`
 }
 
 // Timings: RequestMS is measured by CMoA; the rest come from llama-server's

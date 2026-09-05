@@ -311,7 +311,11 @@ func ask(ctx context.Context, client *llm.Client, p *config.Proposer, face task.
 	if callErr == nil {
 		raw = []byte(resp.RawContent)
 		cand.FinishReason = resp.FinishReason
-		cand.Usage = trace.Usage{PromptTokens: resp.Usage.PromptTokens, CompletionTokens: resp.Usage.CompletionTokens}
+		cand.Usage = trace.Usage{
+			PromptTokens: resp.Usage.PromptTokens, CompletionTokens: resp.Usage.CompletionTokens,
+			ReasoningTokens: resp.Usage.Details.ReasoningTokens,
+		}
+		cand.ReasoningBytes = reasoningBytes(resp)
 		cand.Timings.ServerPromptMS = resp.Timings.PromptMS
 		cand.Timings.ServerPredictedMS = resp.Timings.PredictedMS
 		cand.Timings.TokensPerSecond = resp.Timings.PredictedPerSecond
@@ -353,6 +357,20 @@ func ask(ctx context.Context, client *llm.Client, p *config.Proposer, face task.
 	case task.FaceCoding:
 	}
 	return dir.WriteCandidate(cand, raw, body)
+}
+
+// reasoningBytes is how much of the completion was reasoning. A server that
+// separates it says so in reasoning_content; one that does not leaves a
+// <think> block in the content, and the difference between the raw and the
+// stripped text is the same quantity.
+func reasoningBytes(resp *llm.Response) int {
+	if n := len(resp.Reasoning); n > 0 {
+		return n
+	}
+	if n := len(resp.RawContent) - len(resp.Content); n > 0 {
+		return n
+	}
+	return 0
 }
 
 // classifyChat sets the candidate's status from the completion text and
