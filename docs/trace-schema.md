@@ -30,12 +30,117 @@ largest directory is the latest run. Every JSON file is written atomically.
 | `run_id`, `created_at`, `cmoa_version`, `prompt_version` | identity of the run and of the code and prompt templates that produced it |
 | `task` | `id`, `dir`, `repo`, `rev` (as written), `resolved_rev` (commit SHA), `files`, `instruction_sha256` |
 | `config` | the effective `cmoa.json` after defaults; holds `api_key_env` names, never key values |
-| `harness` | `vault`, `as_of` (valid time, YYYY-MM-DD), `at` (vault commit, `-dirty` suffix when the tree had changes), `docdag_version`, `binding` (id/title/status/path of each binding document) |
+| `harness` | `vault`, `as_of` (valid time, YYYY-MM-DD), `at` (vault commit, `-dirty` suffix when the tree had changes), `docdag_version`, `binding` (id/title/status/path of each binding document), `render` (the rendered harness directory, absent when the run was given none) |
 | `proposers` | `id`, `model`, `base_url` per proposer, in configured order |
 | `byzantine` | `n` proposers, `f = floor((n-1)/3)` deceptive proposers tolerated |
 
 With `harness.as_of` and `harness.at`, `docdag --as-of <as_of> --at <at>
 query --binding` in the vault reconstructs what the run read.
+
+### harness.render
+
+`cmoa propose --harness <dir>` is given a *rendered harness directory*: the
+tree a layer above materialises from the harness edits that are in force.
+CMoA reads it, renders it into the prompt, and records what it read.
+
+```json
+"render": {
+  "dir": "/absolute/path/to/render",
+  "tree_sha256": "9f2c…",
+  "rendered_bytes": 357,
+  "files": [
+    {"path": "memory/00-conventions.md", "sha256": "…"},
+    {"path": "skills/emit-diff/SKILL.md", "sha256": "…"},
+    {"path": "system-prompt.md", "sha256": "…"}
+  ]
+}
+```
+
+`dir` is absolute, as `harness.vault` is, so two runs naming the same
+directory differently record the same value.
+
+`files` lists **every** file in the tree in path order, by its
+slash-separated path relative to `dir`, whether or not CMoA renders it — a
+file on a surface CMoA cannot inject yet still makes a distinct harness
+state. Two paths are excluded: `.git` (a directory, or the one-line file a
+worktree or submodule leaves) and `.git/**`, which is not harness content,
+and a top-level `render.json`, which is the renderer's own manifest and
+cannot contain its own digest.
+
+`rendered_bytes` is how much of the harness reached the two messages: the
+system appendix, every note body, and one name-plus-description per skill.
+It is the number the context budget below is spent on, and it lets a reader
+correlate a bad run with prompt length.
+
+`tree_sha256` is sha256 over the concatenation of `<path>\n<sha256>\n` for
+each entry of `files`, in that order. The whole tree is one number, so a
+renderer's claim about what it wrote and CMoA's record of what it read
+compare in one comparison. **The digest is computed by CMoA from the
+directory it read**; a manifest the renderer supplies is never copied into
+the trace.
+
+The digest is over *files*. An empty directory does not reach it, so two
+trees that differ only by one cannot be told apart by the comparison — which
+is why an empty `skills/<name>/` is refused outright (below) rather than
+left to it.
+
+`prompt_version` digests the prompt *templates*. It is `harness.render`
+that says what was poured into them, so the two together identify the
+prompt a run sent.
+
+### the harness directory
+
+| path | rendered as |
+| --- | --- |
+| `system-prompt.md` | appended to the system message after CMoA's own contract, verbatim, under a `HARNESS` heading. The contract comes first and is never replaced |
+| `memory/**/*.md` | a `## Notes` section of the user message: every `.md` file under `memory/`, in path order, each as its body. A file that is not `.md` (a `.gitkeep`) and a body that is only whitespace are not notes |
+| `skills/<name>/SKILL.md` | a `## Available skills` section of the user message, one `- <name>: <description>` line per skill, in path order. The **body is not rendered**: CMoA v0 has no step at which a skill could be invoked, so rendering a body would model a harness that does not exist |
+
+`<description>` is the frontmatter `description:` when there is one, and
+otherwise the first line of the body that is neither blank nor a heading;
+newlines in it are folded to spaces. A skill's name is its directory name
+and must match `^[a-z0-9][a-z0-9._-]{0,63}$` — the listing is one line per
+skill, and a name a machine proposed must not be able to write lines of its
+own.
+
+Everything else about the bytes is the renderer's: content is rendered
+verbatim, CRLF line endings included.
+
+Four things are refused, with exit 3 — each of them would otherwise make an
+edit measure as a no-op for the wrong reason, or make the digest commit to
+bytes that were never sent:
+
+- a `skills/<name>/` with no `SKILL.md` **file**, empty directory included;
+- a `SKILL.md` with no description at all, or a skill name outside the
+  alphabet above;
+- a file that is not valid UTF-8 (`… is not valid UTF-8; proposers only see
+  text`), which the JSON encoder would silently replace on the way out, and
+  anything that is not a regular file (a symlink is refused, never
+  followed);
+- a tree whose rendered bytes do not fit the budget below.
+
+A directory holding none of the three surfaces renders exactly the prompt a
+run without `--harness` renders, byte for byte: an edit that adds nothing
+measures as nothing. That rendering is pinned by a golden in
+`internal/prompt/testdata/`.
+
+### the context budget
+
+`task.json`'s `max_context_bytes` (default 65536) bounds the instruction and
+the files. The harness is counted against the **same** budget: a Notes
+section is as much of the model's context as a file is, and `memory` and
+`skills` are the auto-accepted surfaces, so nothing human-gated stands
+between a mined pattern and an unbounded Notes section.
+
+`instruction + files + rendered_bytes > max_context_bytes` refuses the run
+with exit 3, before anything is written, and the message names both numbers:
+
+```
+cmoa: propose: context budget exceeded: instruction and files 1180 bytes
+plus harness 101 bytes total 1281, over max_context_bytes 1200
+```
+
+Without `--harness` the check is the one `task.json` already made.
 
 ## candidates/<id>.json
 

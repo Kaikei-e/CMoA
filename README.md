@@ -31,6 +31,7 @@ Go standard library. What comes next, and in what order, is in
 go build -o bin/cmoa ./cmd/cmoa
 cd examples/task-hello && ./setup.sh
 cmoa propose --task . --config /path/to/cmoa.json     # writes runs/<run-id>/
+cmoa propose --task . --harness ./render --seed 7 --temperature 0
 cmoa select  --task .                                  # verifies, writes select.json
 cmoa verify  --task . --diff reference.diff            # one diff, one JSON object
 cmoa surfaces                                          # the editable surfaces
@@ -51,6 +52,33 @@ performance gate can say *which* invariant moved. `cmoa verify` judges both
 kinds; `cmoa select` judges exit-code verifiers only. What a run leaves
 behind, and the band CSV's contract, are in
 [docs/trace-schema.md](docs/trace-schema.md).
+
+`--harness <dir>` names a *rendered harness directory* — the tree a layer
+above materialises from the harness edits that are in force. CMoA reads
+three things out of it: `system-prompt.md` is appended to its own output
+contract (never replacing it), `memory/**/*.md` become a `## Notes` section
+in path order, and each `skills/<name>/SKILL.md` contributes one
+`- <name>: <description>` line. Skill bodies are not rendered; v0 has no
+step that would load one. The directory is per run, so it is a flag and not
+a `cmoa.json` field, and an empty one renders the prompt a run without it
+renders, byte for byte. CMoA hashes the tree itself and records every file
+and the digest in `run.json` as `harness.render`, so what a renderer says
+it wrote and what CMoA read can be compared.
+
+The harness is counted against the task's own `max_context_bytes`: a note
+is as much of the model's context as a file is, so a tree that does not fit
+refuses the run (exit 3) instead of overrunning the server's context and
+being scored as a regression. A harness that would make an edit measure as
+a no-op for the wrong reason is refused too — a skill directory with no
+`SKILL.md`, a skill with no description, a name outside
+`^[a-z0-9][a-z0-9._-]{0,63}$`, a file that is not valid UTF-8 or not a
+regular file. `--harness ""` is an error, not "no harness".
+
+`--seed <int>` and `--temperature <float>` override *every* proposer's seed
+and temperature for one run, and the effective config in `run.json` records
+the values that were sent. They are independent flags, so pairing them is
+the caller's job: a repeated measurement wants both — `--seed <n>
+--temperature 0` — because a seed alone still samples.
 
 ## Scope
 

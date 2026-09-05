@@ -1,4 +1,14 @@
-# Task
+{{if .Harness.HasContext}}# Harness
+{{if .Harness.Notes}}
+## Notes
+{{range .Harness.Notes}}
+{{.Body}}
+{{end}}{{end}}{{if .Harness.Skills}}
+## Available skills
+
+{{range .Harness.Skills}}- {{.Name}}: {{.Description}}
+{{end}}{{end}}
+{{end}}# Task
 
 {{.Instruction}}
 # Files

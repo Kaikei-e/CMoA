@@ -37,7 +37,3 @@ SCOPE
 - Change only what the task requires. Do not reformat untouched code.
 - Do not add files that were not requested. Do not edit files you were not given. Do not modify tests unless the task asks you to.
 - If the task cannot be done with the files provided, emit an empty diff block and nothing else.
-{{if .Harness.SystemAppendix}}
-HARNESS
-
-{{.Harness.SystemAppendix}}{{end}}

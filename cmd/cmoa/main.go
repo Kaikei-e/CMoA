@@ -1,6 +1,7 @@
 // Command cmoa is the CMoA runtime, v0: the coding face only.
 //
 //	cmoa propose --task <dir> [--config <file>] [--as-of YYYY-MM-DD] [--run-id <id>]
+//	             [--harness <dir>] [--seed <int>] [--temperature <float>]
 //	cmoa select  --task <dir> [--config <file>] [--run <run-dir>]
 //	cmoa verify  --task <dir> --diff <file> [--out <dir>] [--timeout <dur>] [--label <name>] [--config <file>]
 //	cmoa surfaces [--format text|json]
@@ -11,7 +12,8 @@
 // is in select.json and on stdout. verify answers about one diff, so it
 // spends the codes differently: 0 the verifier passed, 1 it answered no
 // (fail, apply_failed, timeout), 2 usage or task error, 3 the verifier
-// could not be run.
+// could not be run. A --harness directory that is not there is a usage
+// error (2); one that is there and malformed is an input error (3).
 package main
 
 import (
@@ -21,6 +23,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -29,6 +32,7 @@ import (
 	"github.com/Kaikei-e/CMoA"
 	"github.com/Kaikei-e/CMoA/internal/config"
 	"github.com/Kaikei-e/CMoA/internal/harness"
+	"github.com/Kaikei-e/CMoA/internal/harnessdir"
 	"github.com/Kaikei-e/CMoA/internal/propose"
 	"github.com/Kaikei-e/CMoA/internal/selection"
 	"github.com/Kaikei-e/CMoA/internal/task"
@@ -76,6 +80,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 func usage(w io.Writer) {
 	fmt.Fprint(w, `usage:
   cmoa propose --task <dir> [--config <file>] [--as-of YYYY-MM-DD] [--run-id <id>]
+               [--harness <dir>] [--seed <int>] [--temperature <float>]
   cmoa select  --task <dir> [--config <file>] [--run <run-dir>]
   cmoa verify  --task <dir> --diff <file> [--out <dir>] [--timeout <dur>] [--label <name>] [--config <file>]
   cmoa surfaces [--format text|json]
@@ -130,14 +135,44 @@ func cmdPropose(ctx context.Context, args []string, stdout, stderr io.Writer, lo
 	cfgPath := fs.String("config", "", "cmoa.json (default: $CMOA_CONFIG, <task>/cmoa.json, ./cmoa.json)")
 	asOf := fs.String("as-of", "", "day the harness is read for, YYYY-MM-DD (default today)")
 	runID := fs.String("run-id", "", "run id to create (default: generated)")
+	harnessDir := fs.String("harness", "", "rendered harness directory (default: none)")
+	seed := fs.Int64("seed", 0, "override every proposer's seed (pair with --temperature)")
+	temperature := fs.Float64("temperature", 0, "override every proposer's temperature (pair with --seed)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
+	}
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	opt := propose.Options{AsOf: *asOf, Version: version(), Log: logf}
+	if set["seed"] {
+		opt.Seed = seed
+	}
+	if set["temperature"] {
+		if math.IsNaN(*temperature) || math.IsInf(*temperature, 0) || *temperature < 0 || *temperature > 2 {
+			fmt.Fprintf(stderr, "cmoa: --temperature %v is outside [0, 2]\n", *temperature)
+			return exitUsage
+		}
+		opt.Temperature = temperature
+	}
+	if set["harness"] {
+		if *harnessDir == "" {
+			fmt.Fprintln(stderr, "cmoa: --harness needs a directory; omit the flag to run without a harness")
+			return exitUsage
+		}
+		h, err := harnessdir.Load(*harnessDir)
+		if err != nil {
+			fmt.Fprintln(stderr, "cmoa:", err)
+			if errors.Is(err, harnessdir.ErrNotFound) {
+				return exitUsage
+			}
+			return exitInvalid
+		}
+		opt.Harness = h
 	}
 	cfg, t, code := loadAll(*cfgPath, *taskDir, stderr)
 	if code != exitOK {
 		return code
 	}
-	opt := propose.Options{AsOf: *asOf, Version: version(), Log: logf}
 	if *runID != "" {
 		id, err := trace.ParseRunID(*runID)
 		if err != nil {
@@ -149,7 +184,7 @@ func cmdPropose(ctx context.Context, args []string, stdout, stderr io.Writer, lo
 	dir, err := propose.Run(ctx, cfg, t, opt)
 	if err != nil {
 		fmt.Fprintln(stderr, "cmoa:", err)
-		if errors.Is(err, harness.ErrNoVault) {
+		if errors.Is(err, harness.ErrNoVault) || errors.Is(err, propose.ErrContextBudget) {
 			return exitInvalid
 		}
 		return exitRuntime
