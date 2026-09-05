@@ -14,6 +14,7 @@ import (
 
 	"github.com/Kaikei-e/CMoA/internal/config"
 	"github.com/Kaikei-e/CMoA/internal/harness"
+	"github.com/Kaikei-e/CMoA/internal/harnessdir"
 	"github.com/Kaikei-e/CMoA/internal/llm"
 	"github.com/Kaikei-e/CMoA/internal/patch"
 	"github.com/Kaikei-e/CMoA/internal/prompt"
@@ -21,14 +22,22 @@ import (
 	"github.com/Kaikei-e/CMoA/internal/trace"
 )
 
+// ErrContextBudget is returned when the task and the rendered harness
+// together exceed the task's max_context_bytes. Nothing is written: the run
+// would have sent a prompt the task refused to allow.
+var ErrContextBudget = errors.New("propose: context budget exceeded")
+
 // Options tune a run.
 type Options struct {
-	AsOf    string      // YYYY-MM-DD; empty means today
-	RunID   trace.RunID // empty means generate
-	Client  *llm.Client // nil means a default client
-	Version string      // cmoa version string for run.json
-	Log     func(format string, args ...any)
-	Now     func() time.Time
+	AsOf        string          // YYYY-MM-DD; empty means today
+	RunID       trace.RunID     // empty means generate
+	Client      *llm.Client     // nil means a default client
+	Version     string          // cmoa version string for run.json
+	Harness     *harnessdir.Dir // nil means no harness directory
+	Seed        *int64          // overrides every proposer's seed
+	Temperature *float64        // overrides every proposer's temperature
+	Log         func(format string, args ...any)
+	Now         func() time.Time
 }
 
 // Run performs propose for t and returns the run directory. The harness
@@ -48,6 +57,19 @@ func Run(ctx context.Context, cfg *config.Config, t *task.Task, opt Options) (tr
 		client = &llm.Client{HTTP: &http.Client{}}
 	}
 
+	// The overrides are applied before the effective config is recorded, so
+	// run.json says what was sent, not what the file said.
+	for i := range cfg.Proposers {
+		if opt.Seed != nil {
+			seed := *opt.Seed
+			cfg.Proposers[i].Seed = &seed
+		}
+		if opt.Temperature != nil {
+			temp := *opt.Temperature
+			cfg.Proposers[i].Temperature = &temp
+		}
+	}
+
 	rev, err := t.ResolveRev(ctx)
 	if err != nil {
 		return "", err
@@ -58,7 +80,21 @@ func Run(ctx context.Context, cfg *config.Config, t *task.Task, opt Options) (tr
 	}
 	logf("harness: %s at %s as of %s (%d binding)", snap.Vault, snap.At, snap.AsOf, len(snap.Binding))
 
-	messages, err := prompt.Build(t)
+	var rendered prompt.Harness
+	if opt.Harness != nil {
+		rendered = opt.Harness.Harness
+		logf("harness dir: %s (%d files, tree %s, %d notes, %d skills, %d bytes)", opt.Harness.Path,
+			len(opt.Harness.Files), opt.Harness.TreeSHA256[:12], len(rendered.Notes), len(rendered.Skills), rendered.Bytes())
+		// A Notes section is as much of the model's context as a file is,
+		// and memory and skills are the auto-accepted surfaces: an unbounded
+		// harness would silently overrun the server's context and be scored
+		// as a harness regression when it is a budget bug.
+		if taskBytes, harnessBytes := t.ContextBytes(), rendered.Bytes(); taskBytes+harnessBytes > t.MaxContextBytes {
+			return "", fmt.Errorf("%w: instruction and files %d bytes plus harness %d bytes total %d, over max_context_bytes %d",
+				ErrContextBudget, taskBytes, harnessBytes, taskBytes+harnessBytes, t.MaxContextBytes)
+		}
+	}
+	messages, err := prompt.Build(t, rendered)
 	if err != nil {
 		return "", err
 	}
@@ -87,7 +123,7 @@ func Run(ctx context.Context, cfg *config.Config, t *task.Task, opt Options) (tr
 			Files: t.FilePaths(), InstructionSHA256: t.InstructionSHA256(),
 		},
 		Config:    effective,
-		Harness:   harnessRecord(snap),
+		Harness:   harnessRecord(snap, opt.Harness),
 		Byzantine: trace.Byzantine{N: n, F: f},
 	}
 	for _, p := range cfg.Proposers {
@@ -114,10 +150,20 @@ func Run(ctx context.Context, cfg *config.Config, t *task.Task, opt Options) (tr
 	return dir, nil
 }
 
-func harnessRecord(s *harness.Snapshot) trace.Harness {
+func harnessRecord(s *harness.Snapshot, dir *harnessdir.Dir) trace.Harness {
 	h := trace.Harness{Vault: s.Vault, AsOf: s.AsOf, At: s.At, DocdagVersion: s.DocdagVersion, Binding: []trace.HarnessDoc{}}
 	for _, d := range s.Binding {
 		h.Binding = append(h.Binding, trace.HarnessDoc{ID: d.ID, Title: d.Title, Status: d.Status, Path: d.Path})
+	}
+	if dir != nil {
+		r := &trace.HarnessRender{
+			Dir: dir.Path, TreeSHA256: dir.TreeSHA256,
+			RenderedBytes: dir.Harness.Bytes(), Files: []trace.HarnessFile{},
+		}
+		for _, f := range dir.Files {
+			r.Files = append(r.Files, trace.HarnessFile{Path: f.Path, SHA256: f.SHA256})
+		}
+		h.Render = r
 	}
 	return h
 }

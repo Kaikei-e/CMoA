@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Nine records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
+Ten records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
 trace schema in [../trace-schema.md](../trace-schema.md) are what the binary does, so a record is
 read for *why* a flag, a status name or a file exists, and the code for what it accepts today.
 Records 0002 onward are written in Japanese, the language they were argued in.
@@ -123,3 +123,13 @@ answers: such a verifier prints a CSV of invariants, values and their bands, and
 band is the candidate's `fail`, while a container that exits non-zero with every band held is a
 `runner_error` — the harness broke, and that is not a fact about the code. `select` refuses a band
 task outright; a measurement is not something the pool can be asked to satisfy.
+
+## [0010 — `propose` reads a rendered harness directory](0010-harness-directory.md)
+
+The record that closes the gap 0007 left open: binding edits were listed in `run.json` but never
+reached a proposer. uzushio now renders the binding set into a directory — `system-prompt.md`
+appended after the fixed template, `memory/**/*.md` as a Notes section, `skills/<name>/SKILL.md` as a
+name-and-description list — and `cmoa propose --harness <dir>` reads it, hashing the tree it read
+into `harness.render` so the layer above can check it rendered what it meant to. `--seed` and
+`--temperature` pin every proposer for a run, which is what a paired baseline-versus-edit measurement
+needs. CMoA still interprets no vault content; it reads files.

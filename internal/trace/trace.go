@@ -157,12 +157,34 @@ type TaskRef struct {
 // Harness is the DocDag snapshot the run read: which vault, on which day
 // (valid time) and at which revision (transaction time). With these three,
 // `docdag --as-of <as_of> --at <at> query --binding` reconstructs it.
+// Render is the rendered harness directory the run was given, absent when
+// it was given none.
 type Harness struct {
-	Vault         string       `json:"vault"`
-	AsOf          string       `json:"as_of"`
-	At            string       `json:"at"`
-	DocdagVersion string       `json:"docdag_version"`
-	Binding       []HarnessDoc `json:"binding"`
+	Vault         string         `json:"vault"`
+	AsOf          string         `json:"as_of"`
+	At            string         `json:"at"`
+	DocdagVersion string         `json:"docdag_version"`
+	Binding       []HarnessDoc   `json:"binding"`
+	Render        *HarnessRender `json:"render,omitempty"`
+}
+
+// HarnessRender is the harness directory `--harness` named, as CMoA read
+// it: every file it holds and one digest over the lot. CMoA hashes the tree
+// itself rather than copying the renderer's manifest, so the two can be
+// compared. TreeSHA256 is sha256 over "<path>\n<sha256>\n" per file in
+// path order.
+type HarnessRender struct {
+	Dir           string        `json:"dir"` // absolute, as the vault path is
+	TreeSHA256    string        `json:"tree_sha256"`
+	RenderedBytes int           `json:"rendered_bytes"` // harness bytes in the two messages
+	Files         []HarnessFile `json:"files"`
+}
+
+// HarnessFile is one file of the rendered tree, by its slash-separated path
+// relative to the directory root.
+type HarnessFile struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
 }
 
 // HarnessDoc is one binding document as query --binding lists it.

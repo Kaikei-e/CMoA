@@ -3,6 +3,7 @@ package propose
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,11 +11,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Kaikei-e/CMoA/internal/config"
+	"github.com/Kaikei-e/CMoA/internal/harnessdir"
 	"github.com/Kaikei-e/CMoA/internal/task"
 	"github.com/Kaikei-e/CMoA/internal/trace"
 )
@@ -207,5 +210,178 @@ func TestExplicitRunID(t *testing.T) {
 	}
 	if _, err := Run(context.Background(), cfg, tk, Options{RunID: id}); err == nil {
 		t.Fatal("duplicate run id must fail")
+	}
+}
+
+// The rendered harness must reach both the prompt and run.json, and the
+// digest in run.json must be the one CMoA computed from the directory it
+// read — not one a renderer handed it.
+func TestRunWithHarnessDirectory(t *testing.T) {
+	tk, vault := fixture(t)
+	docdag, _ := filepath.Abs("testdata/bin/docdag")
+	hdir := filepath.Join(t.TempDir(), "harness")
+	for p, c := range map[string]string{
+		"system-prompt.md":          "Prefer the standard library.\n",
+		"memory/00-conventions.md":  "Tabs, not spaces.\n",
+		"skills/emit-diff/SKILL.md": "---\nname: emit-diff\ndescription: Emit one unified diff.\n---\n\nBody not rendered.\n",
+		"render.json":               `{"renderer_version":"test"}`,
+	} {
+		full := filepath.Join(hdir, filepath.FromSlash(p))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(c), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h, err := harnessdir.Load(hdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var seen map[string]any
+	p := proposer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &seen)
+		reply("```diff\n"+goodDiff+"```")(w, r)
+	})
+	var mu sync.Mutex
+	bodies := map[string]map[string]any{}
+	record := func(id string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			var body map[string]any
+			_ = json.Unmarshal(b, &body)
+			mu.Lock()
+			bodies[id] = body
+			mu.Unlock()
+			reply("```diff\n"+goodDiff+"```")(w, r)
+		}
+	}
+	second := proposer(t, record("b"))
+	cfg, err := config.Parse([]byte(`{"version":1,"proposers":[
+	  {"id":"a","base_url":"` + p + `","model":"m","temperature":0.7},
+	  {"id":"b","base_url":"` + second + `","model":"m2","temperature":1.1,"seed":9}
+	],"harness":{"vault":"` + vault + `","docdag":"` + docdag + `"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, temp := int64(42), 0.0
+	dir, err := Run(context.Background(), cfg, tk, Options{Harness: h, Seed: &seed, Temperature: &temp})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run, err := dir.ReadRun()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := run.Harness.Render
+	if rec == nil || rec.Dir != hdir || rec.TreeSHA256 != h.TreeSHA256 || len(rec.Files) != 3 {
+		t.Fatalf("harness.render = %+v", rec)
+	}
+	if rec.Files[0].Path != "memory/00-conventions.md" || len(rec.Files[0].SHA256) != 64 {
+		t.Fatalf("files = %+v", rec.Files)
+	}
+	// The flags override every proposer, and run.json records what was sent.
+	if !strings.Contains(string(run.Config), `"temperature": 0`) || !strings.Contains(string(run.Config), `"seed": 42`) {
+		t.Fatalf("effective config = %s", run.Config)
+	}
+	if seen["temperature"].(float64) != 0 || seen["seed"].(float64) != 42 {
+		t.Fatalf("request body = %v", seen)
+	}
+	// Every proposer, not just the first: the second had a temperature and
+	// a seed of its own in the file.
+	mu.Lock()
+	b := bodies["b"]
+	mu.Unlock()
+	if b["temperature"].(float64) != 0 || b["seed"].(float64) != 42 {
+		t.Fatalf("second proposer body = %v", b)
+	}
+	msgs := seen["messages"].([]any)
+	sys := msgs[0].(map[string]any)["content"].(string)
+	user := msgs[1].(map[string]any)["content"].(string)
+	if !strings.HasSuffix(sys, "\nHARNESS\n\nPrefer the standard library.") {
+		t.Fatalf("system = %q", sys)
+	}
+	if !strings.HasPrefix(user, "# Harness\n\n## Notes\n\nTabs, not spaces.\n\n## Available skills\n\n- emit-diff: Emit one unified diff.\n\n# Task\n") {
+		t.Fatalf("user = %q", user)
+	}
+	if strings.Contains(user, "Body not rendered") {
+		t.Fatal("a skill contributes its description, not its body")
+	}
+}
+
+// No --harness is the run CMoA made before harnesses existed.
+func TestRunWithoutHarnessDirectory(t *testing.T) {
+	tk, vault := fixture(t)
+	docdag, _ := filepath.Abs("testdata/bin/docdag")
+	var seen map[string]any
+	p := proposer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &seen)
+		reply("```diff\n"+goodDiff+"```")(w, r)
+	})
+	cfg, _ := config.Parse([]byte(`{"version":1,"proposers":[{"id":"a","base_url":"` + p + `","model":"m"}],"harness":{"vault":"` + vault + `","docdag":"` + docdag + `"}}`))
+	dir, err := Run(context.Background(), cfg, tk, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := dir.ReadRun()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Harness.Render != nil {
+		t.Fatalf("render = %+v, want absent", run.Harness.Render)
+	}
+	msgs := seen["messages"].([]any)
+	if user := msgs[1].(map[string]any)["content"].(string); !strings.HasPrefix(user, "# Task\n") {
+		t.Fatalf("user = %q", user)
+	}
+	if seen["temperature"].(float64) != 0.2 {
+		t.Fatalf("without --temperature the configured value stands: %v", seen["temperature"])
+	}
+}
+
+// The harness counts against the task's own context budget: memory and
+// skills are the auto-accepted surfaces, so nothing human-gated stands
+// between a mined pattern and an unbounded Notes section.
+func TestHarnessCountsAgainstContextBudget(t *testing.T) {
+	tk, vault := fixture(t)
+	docdag, _ := filepath.Abs("testdata/bin/docdag")
+	tk.MaxContextBytes = len(tk.Instruction) + len(tk.Files[0].Content) + 100
+	hdir := filepath.Join(t.TempDir(), "harness")
+	if err := os.MkdirAll(filepath.Join(hdir, "memory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hdir, "memory", "big.md"), []byte(strings.Repeat("x", 101)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h, err := harnessdir.Load(hdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := proposer(t, reply("```diff\n"+goodDiff+"```"))
+	cfg, _ := config.Parse([]byte(`{"version":1,"proposers":[{"id":"a","base_url":"` + p + `","model":"m"}],"harness":{"vault":"` + vault + `","docdag":"` + docdag + `"}}`))
+	_, err = Run(context.Background(), cfg, tk, Options{Harness: h})
+	if !errors.Is(err, ErrContextBudget) {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "harness 101 bytes") || !strings.Contains(err.Error(), "max_context_bytes") {
+		t.Errorf("the message must name both numbers: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tk.Dir, "runs")); err == nil {
+		t.Fatal("runs/ must not be created when the prompt would not fit")
+	}
+	// One byte less fits.
+	if err := os.WriteFile(filepath.Join(hdir, "memory", "big.md"), []byte(strings.Repeat("x", 100)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h, err = harnessdir.Load(hdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), cfg, tk, Options{Harness: h}); err != nil {
+		t.Fatal(err)
 	}
 }

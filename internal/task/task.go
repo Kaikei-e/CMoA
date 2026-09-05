@@ -294,7 +294,6 @@ func Load(dir string) (*Task, error) {
 	if err := loadDoctor(t, &m); err != nil {
 		return nil, err
 	}
-	total := len(inst)
 	seen := map[string]bool{}
 	for i, p := range m.Files {
 		at := fmt.Sprintf("files[%d]", i)
@@ -313,10 +312,9 @@ func Load(dir string) (*Task, error) {
 		if !utf8.Valid(b) {
 			return nil, &ValidationError{at, clean + " is not valid UTF-8; proposers only see text"}
 		}
-		total += len(b)
 		t.Files = append(t.Files, File{Path: clean, Content: string(b)})
 	}
-	if total > t.MaxContextBytes {
+	if total := t.ContextBytes(); total > t.MaxContextBytes {
 		return nil, &ValidationError{"files", fmt.Sprintf("instruction and files total %d bytes, over max_context_bytes %d", total, t.MaxContextBytes)}
 	}
 	return t, nil
@@ -468,6 +466,18 @@ func cleanRepoPath(p string) (string, error) {
 		return "", fmt.Errorf("%q escapes the repository", p)
 	}
 	return clean, nil
+}
+
+// ContextBytes is what the task itself pours into the prompt: the
+// instruction and the full text of every file it lists. It is the number
+// max_context_bytes bounds, and the number a caller adds its own additions
+// to before deciding whether the prompt still fits.
+func (t *Task) ContextBytes() int {
+	n := len(t.Instruction)
+	for _, f := range t.Files {
+		n += len(f.Content)
+	}
+	return n
 }
 
 // FilePaths lists the file paths in order.

@@ -1,0 +1,21 @@
+# Task
+
+Fix Add.
+
+# Files
+
+## add.go
+
+```
+package add
+```
+
+## sub/b.go
+
+```
+package sub
+```
+
+# Output
+
+One ```diff block containing a unified diff against the files above. Nothing else.
