@@ -108,8 +108,11 @@ round that produced it stays on screen. Each answer carries a dim line —
 run.
 
 A round that selected nobody is not an answer with an apology: the panel shows
-`NO CANDIDATE (all_draws) run <id>` in red, with no assistant line, and the run
-id opens the round that refused. The question stays in the transcript, struck
+`NO CANDIDATE (invalid_output) run <id>` in red, with no assistant line, and the run
+id opens the round that refused. Since the chat face settles a tied ranking
+with a score and a recorded tie-break, that 502 is the residual case only --
+too few answers to compare, or a judge whose answer no parser could read --
+and 504 is still the judge running out of time. The question stays in the transcript, struck
 through, so it can be edited and sent again; it is not forwarded as history in
 later turns, because a round that never happened is not part of the
 conversation. The transcript lives in `sessionStorage` and lasts as long as the

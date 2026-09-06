@@ -82,10 +82,10 @@ function cannedCompletion(): unknown {
 function cannedNoCandidate(): unknown {
 	return {
 		error: {
-			message: 'no candidate was selected: all_draws',
+			message: 'no candidate was selected: invalid_output',
 			type: 'no_candidate',
 			param: CANNED_RUN_NO_CANDIDATE,
-			code: 'all_draws'
+			code: 'invalid_output'
 		}
 	};
 }

@@ -155,7 +155,7 @@ test('a round that selected nobody shows the fault and no answer', async ({ page
 	await page.getByTestId('comm-input').press('Enter');
 
 	const fault = page.getByTestId('comm-fault');
-	await expect(fault).toContainText('NO CANDIDATE (all_draws)');
+	await expect(fault).toContainText('NO CANDIDATE (invalid_output)');
 	await expect(fault).toContainText(`run ${CANNED_RUN_NO_CANDIDATE}`);
 	await expect(page.getByTestId('comm-assistant')).toHaveCount(0);
 	// The refused turn stays on screen so it can be edited and sent again.
