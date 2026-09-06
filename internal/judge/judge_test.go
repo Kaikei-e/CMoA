@@ -376,17 +376,35 @@ func TestAggregate(t *testing.T) {
 			draws: map[trace.DrawReason]int{trace.DrawUnmeasured: 1},
 		},
 		{
-			name: "an unmeasured pair that cannot reach a sweep is only a draw",
+			// x leads on two halves, but the pair nobody measured is worth
+			// a whole point to y or z — enough to overtake it. Under the
+			// score the question is not "could someone still sweep" but
+			// "could the answer still change", and here it could.
+			name: "an unmeasured pair that could still overtake the leader escalates",
 			pairs: []trace.JudgePair{
 				pair("x", "y", ok(trace.ChoiceTie), ok(trace.ChoiceTie)),
 				pair("x", "z", ok(trace.ChoiceTie), ok(trace.ChoiceTie)),
 				pair("y", "z", trace.JudgeOrder{Status: trace.JudgeCallTimeout}, trace.JudgeOrder{Status: trace.JudgeCallTimeout}),
 			},
-			// An unmeasured pair scores nothing for either side, so x's two
-			// halves beat the halves y and z did not get.
-			kind: trace.SelectionSelected, id: "x", swap: 2,
+			kind: trace.SelectionJudgeTimeout, swap: 2,
 			scores: map[string]float64{"x": 1, "y": 0.5, "z": 0.5},
-			reason: "copeland winner, score 1 of 2 (no condorcet winner)",
+			draws:  map[trace.DrawReason]int{trace.DrawTie: 2, trace.DrawUnmeasured: 1},
+		},
+		{
+			// The same shape, with the leader far enough ahead that the
+			// missing point cannot reach it: the answer stands.
+			name: "an unmeasured pair that cannot reach the leader is only a draw",
+			pairs: []trace.JudgePair{
+				pair("w", "x", ok(trace.ChoiceA), ok(trace.ChoiceB)),
+				pair("w", "y", ok(trace.ChoiceA), ok(trace.ChoiceB)),
+				pair("w", "z", ok(trace.ChoiceTie), ok(trace.ChoiceTie)),
+				pair("x", "y", ok(trace.ChoiceTie), ok(trace.ChoiceTie)),
+				pair("x", "z", ok(trace.ChoiceA), ok(trace.ChoiceB)),
+				pair("y", "z", trace.JudgeOrder{Status: trace.JudgeCallTimeout}, trace.JudgeOrder{Status: trace.JudgeCallTimeout}),
+			},
+			kind: trace.SelectionSelected, id: "w",
+			scores: map[string]float64{"w": 2.5, "x": 1.5, "y": 0.5, "z": 0.5},
+			reason: "copeland winner, score 2.5 of 3 (no condorcet winner)",
 			draws:  map[trace.DrawReason]int{trace.DrawTie: 2, trace.DrawUnmeasured: 1},
 		},
 		{
@@ -411,7 +429,7 @@ func TestAggregate(t *testing.T) {
 			for _, id := range rep.Candidates {
 				rep.Wins[id] = 0
 			}
-			Aggregate(rep, tc.norm)
+			Aggregate(rep, texts(tc.norm))
 			if rep.Outcome.Kind != tc.kind {
 				t.Fatalf("kind %q, want %q (%s)", rep.Outcome.Kind, tc.kind, rep.Outcome.Reason)
 			}
@@ -445,7 +463,7 @@ func TestAggregate(t *testing.T) {
 			// The same input twice is the same choice: nothing in the chain
 			// reads a map's iteration order or a clock.
 			again := &trace.JudgeReport{Candidates: candidateIDs(tc.pairs), Wins: map[string]int{}, Pairs: tc.pairs}
-			Aggregate(again, tc.norm)
+			Aggregate(again, texts(tc.norm))
 			if fmt.Sprint(again.Outcome) != fmt.Sprint(rep.Outcome) || fmt.Sprint(again.Ranked) != fmt.Sprint(rep.Ranked) {
 				t.Errorf("not deterministic: %v %v then %v %v", rep.Outcome, rep.Ranked, again.Outcome, again.Ranked)
 			}

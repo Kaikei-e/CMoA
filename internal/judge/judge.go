@@ -165,14 +165,14 @@ func (j *Judge) Run(ctx context.Context, in Input) (*trace.JudgeReport, error) {
 	// Stage 1, before the call list exists: a unanimous answer costs no
 	// judge call at all. The sanitised text is what is compared, so the
 	// candidates are read exactly as the judge would have read them.
-	norm := map[string]string{}
+	tx := Texts{}
 	for i, c := range in.Candidates {
-		norm[c.ID] = Normalize(texts[i])
+		tx[c.ID] = Text{Norm: Normalize(texts[i]), Raw: texts[i]}
 	}
-	if cons, tb := consensus(rep.Candidates, norm); cons != nil {
+	if cons, tb := consensus(rep.Candidates, tx); cons != nil {
 		rep.Consensus, rep.TieBreak = cons, tb
 		logf("consensus: %d of %d agree (%s), no judge call", len(tb.Among), len(rep.Candidates), cons.Agreement)
-		Aggregate(rep, norm)
+		Aggregate(rep, tx)
 		return rep, j.finish(rep, started, now)
 	}
 
@@ -244,7 +244,7 @@ func (j *Judge) Run(ctx context.Context, in Input) (*trace.JudgeReport, error) {
 		return nil, writeErr
 	}
 
-	Aggregate(rep, norm)
+	Aggregate(rep, tx)
 	return rep, j.finish(rep, started, now)
 }
 
@@ -718,14 +718,17 @@ func LastObject(s string) (string, error) {
 // scores, the ranking and the outcome of a report whose orders have been
 // answered.
 //
-// norm holds each candidate's normalised answer, by id; it is what the
-// tie-break's first two keys read. It may be nil — a caller that has only
-// the pairs still gets a deterministic outcome, decided one key further
-// down the chain.
-func Aggregate(rep *trace.JudgeReport, norm map[string]string) {
+// tx holds each candidate's answer, by id; it is what the tie-break reads.
+// It may be nil — a caller that has only the pairs still gets a
+// deterministic outcome, decided at the end of the chain.
+func Aggregate(rep *trace.JudgeReport, tx Texts) {
 	rep.DrawReasons = map[trace.DrawReason]int{}
 	for i := range rep.Pairs {
 		p := &rep.Pairs[i]
+		// A verdict is recomputed, never inherited: aggregating a report
+		// twice, or one assembled by a caller, must not leave a stale
+		// winner behind for the score to spend.
+		p.Verdict, p.DrawReason = trace.VerdictDraw, ""
 		a, b := p.Orders[0], p.Orders[1]
 		// Consistency is about the candidate, not the label: choosing A in
 		// one order and B in the other is the same answer twice, and
@@ -747,8 +750,8 @@ func Aggregate(rep *trace.JudgeReport, norm map[string]string) {
 		rep.DrawReasons[p.DrawReason]++
 	}
 	rep.Scores = scores(rep)
-	rep.Ranked = ranked(rep.Candidates, rep.Scores, norm)
-	rep.Outcome = outcome(rep, norm)
+	rep.Ranked = ranked(rep.Candidates, rep.Scores, tx)
+	rep.Outcome = outcome(rep, tx)
 }
 
 // drawReason says why one pair produced no winner, most severe first: a
@@ -787,7 +790,7 @@ func drawReason(a, b trace.JudgeOrder) trace.DrawReason {
 // an unmeasured pair that could have decided is a timeout or a transport
 // error, and a pair no parser could read is invalid_output, because neither
 // is a judgment the score is entitled to spend.
-func outcome(rep *trace.JudgeReport, norm map[string]string) trace.JudgeOutcome {
+func outcome(rep *trace.JudgeReport, tx Texts) trace.JudgeOutcome {
 	if len(rep.Candidates) < 2 {
 		return trace.JudgeOutcome{Kind: trace.SelectionNoCandidate, Reason: string(trace.ReasonTooFewCandidates)}
 	}
@@ -821,7 +824,7 @@ func outcome(rep *trace.JudgeReport, norm map[string]string) trace.JudgeOutcome 
 			Reason:      fmt.Sprintf("condorcet winner, %d of %d pairs agreed under both orders", need, len(rep.Pairs)),
 		}
 	}
-	if o := escalate(rep, need); o != nil {
+	if o := escalate(rep); o != nil {
 		return *o
 	}
 	for _, p := range rep.Pairs {
@@ -844,8 +847,8 @@ func outcome(rep *trace.JudgeReport, norm map[string]string) trace.JudgeOutcome 
 			Reason: fmt.Sprintf("copeland winner, score %s of %d (no condorcet winner)", number(best), need),
 		}
 	}
-	chosen, key := tieBreak(top, rep.Candidates, norm)
-	among := inOrder(top, rep.Candidates)
+	chosen, key := tieBreak(top, rep.Candidates, tx)
+	among := sortedIDs(top)
 	rep.TieBreak = &trace.TieBreak{Among: among, Key: key, Chosen: chosen}
 	return trace.JudgeOutcome{
 		Kind: trace.SelectionSelected, CandidateID: chosen,
@@ -858,10 +861,18 @@ func outcome(rep *trace.JudgeReport, norm map[string]string) trace.JudgeOutcome 
 func number(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
 // escalate returns judge_timeout or judge_failed when the pairs that were
-// never answered could still have produced a winner, and nil when they
-// could not. A timeout outranks a transport error: it is the one a caller
-// retries.
-func escalate(rep *trace.JudgeReport, need int) *trace.JudgeOutcome {
+// never answered could still have changed who wins, and nil when they could
+// not. A timeout outranks a transport error: it is the one a caller retries.
+//
+// The question is asked in the currency the outcome is decided in. Under
+// the score a missing answer does not have to produce a clean sweep to
+// matter — half a point is enough to overtake a leader or to join the tied
+// set the chain then parts — so a candidate that could still reach the top
+// score escalates, and only a failure that could not move the answer is
+// swallowed. The sole top scorer is not counted against itself: more points
+// for the leader only confirm it, and an opponent that could catch it is
+// checked on its own row.
+func escalate(rep *trace.JudgeReport) *trace.JudgeOutcome {
 	missing := map[string]int{}
 	var timedOut, failed *trace.JudgeOrder
 	for i := range rep.Pairs {
@@ -889,9 +900,13 @@ func escalate(rep *trace.JudgeReport, need int) *trace.JudgeOutcome {
 	if len(missing) == 0 {
 		return nil
 	}
+	best, top := topScore(rep.Candidates, rep.Scores)
 	couldDecide := false
 	for _, id := range rep.Candidates {
-		if rep.Wins[id]+missing[id] >= need {
+		if missing[id] == 0 || (len(top) == 1 && top[0] == id) {
+			continue
+		}
+		if rep.Scores[id]+float64(missing[id]) >= best {
 			couldDecide = true
 		}
 	}

@@ -594,6 +594,8 @@ const (
 // it reads the presentation order or the proposer order: those are the
 // biases the swap exists to detect, not tie-breakers.
 type TieBreak struct {
+	// Among is the tied set, by id in ascending order — the same list
+	// whatever order the run presented the candidates in.
 	Among  []string    `json:"among"`
 	Key    TieBreakKey `json:"key"`
 	Chosen string      `json:"chosen"`
@@ -610,11 +612,16 @@ const (
 	// answers differ in length enough for brevity to mean something. The
 	// counter-lever to the judges' documented verbosity bias.
 	TieBreakLength TieBreakKey = "length"
-	// TieBreakHash: the lowest SHA-256 digest of the normalised answer.
-	// The last key, and the only one that always decides. It is arbitrary,
-	// but it is arbitrary about the answer rather than about the position
-	// it was shown in or the proposer that wrote it.
+	// TieBreakHash: the lowest SHA-256 digest of the answer — of the
+	// normalised text, or of the raw text when the normalised texts are
+	// equal. Arbitrary, but arbitrary about the answer rather than about
+	// the position it was shown in or the proposer that wrote it.
 	TieBreakHash TieBreakKey = "hash"
+	// TieBreakIdentical: no key decided, because the candidates wrote the
+	// same answer to the byte. The lowest candidate id is returned — a
+	// property of the configuration, not of a position, chosen between
+	// answers that are indistinguishable.
+	TieBreakIdentical TieBreakKey = "identical"
 )
 
 // Sanitized is one rewrite the judge's fencing made to a candidate's text.

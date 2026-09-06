@@ -1,6 +1,8 @@
 package judge
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -16,10 +18,13 @@ func TestNormalize(t *testing.T) {
 		{"full-width punctuation too", "答え：１０１！", "答え:101"},
 		{"the ideographic space is a space", "答え　101", "答え 101"},
 		{"emphasis markers are removed", "**101** and `101`", "101 and 101"},
-		{"underscores go with them", "_the_ answer", "the answer"},
+		{"underscores stay: they are word characters", "user_id", "user_id"},
 		{"a bullet at the start of a line goes", "- 101\n- 102", "101 102"},
 		{"a numbered marker goes too", "1. alpha\n2. beta", "alpha beta"},
 		{"and a parenthesised one", "1) alpha\n2) beta", "alpha beta"},
+		{"every marker in a one-line list goes", "1. りんご 2. みかん 3. ぶどう", "りんご みかん ぶどう"},
+		{"a full-width marker is one too", "１．りんご ２．みかん", "りんご みかん"},
+		{"a hyphen inside a word is not a marker", "well-known answer", "well-known answer"},
 		{"a bare number is not a list marker", "101.", "101"},
 		{"nor is a decimal point", "1.101", "1.101"},
 		{"a hyphen with no space is a sign", "-5", "-5"},
@@ -49,6 +54,11 @@ func TestLastNumber(t *testing.T) {
 		{"answer: 276,416", "276416", true},
 		{"答えは 276、416 です", "276416", true},
 		{"3.50", "3.5", true},
+		{"3、000円", "3000", true},
+		{"候補は 1、2、3 です", "3", true},
+		{"1,2345 is not grouped", "2345", true},
+		{"1e5", "1e5", true},
+		{"2.5e-3", "2.5e-3", true},
 		{"007", "7", true},
 		{"the balance is -99", "-99", true},
 		{"utf-8 is a name, 3 is a number", "3", true},
@@ -77,7 +87,16 @@ func TestAgree(t *testing.T) {
 		{name: "separators do not matter", a: "答え: 276,416", b: "276416", how: trace.AgreementNumeric, want: true},
 		{name: "different numbers", a: "101", b: "102"},
 		{name: "no number at all", a: "青いから", b: "赤いから"},
-		{name: "an enumeration is not a number", a: "1. あ\n2. い", b: "1. う\n2. え"},
+		{name: "an enumeration is not a number", a: "1. りんご 2. みかん 3. ぶどう", b: "1. 犬 2. 猫 3. 鳥"},
+		{name: "a comma-separated list is not one number", a: "候補は 1、2、3 です", b: "123 です"},
+		{name: "but a grouped thousand is", a: "3、000円", b: "3000円", how: trace.AgreementNumeric, want: true},
+		{name: "an exponent is not its mantissa's tail", a: "1e5", b: "答えは5"},
+		{name: "nor is it the number it stands for", a: "1e5", b: "100000"},
+		{name: "a negation is not the same answer", a: "3つあります。", b: "3つではありません"},
+		{name: "yes is not no", a: "はい、答えは長さ0のスライスです", b: "いいえ、それは長さ0のスライスではありません"},
+		{name: "two denials still agree", a: "3つはありません", b: "3つではない", how: trace.AgreementNumeric, want: true},
+		{name: "an identifier is not another identifier", a: "the field is user_id", b: "the field is userid"},
+		{name: "knowing is not denying", a: "i know it is 5", b: "the answer is 5", how: trace.AgreementNumeric, want: true},
 		{name: "prose that happens to end in the same figure", a: long, b: "101"},
 		{name: "two empty answers agree on nothing", a: "", b: ""},
 	} {
@@ -201,15 +220,23 @@ func TestTieBreak(t *testing.T) {
 			chosen: "c", key: trace.TieBreakHash,
 		},
 		{
-			// Identical text would have been a consensus, never a tie; the
-			// chain still returns one candidate rather than none.
-			name: "identical answers still resolve", among: []string{"b", "c"},
+			// Two of four can write the same answer and still not be a
+			// consensus, so this is reachable. No key can part them, and
+			// saying "hash" would claim one did.
+			name: "identical answers resolve without claiming a key", among: []string{"c", "b"},
 			norm:   map[string]string{"a": "no", "b": "yes", "c": "yes"},
-			chosen: "b", key: trace.TieBreakHash,
+			chosen: "b", key: trace.TieBreakIdentical,
 		},
 		{
-			name: "with no answers at all it still decides", among: []string{"b", "c"},
-			chosen: "b", key: trace.TieBreakHash,
+			name: "with no answers at all it still decides", among: []string{"c", "b"},
+			chosen: "b", key: trace.TieBreakIdentical,
+		},
+		{
+			// An answer that normalises to nothing does not win a tie, and
+			// does not switch off the key that punishes it.
+			name: "a blank answer loses to one that says something", among: []string{"a", "b"},
+			norm:   map[string]string{"a": "", "b": "answer 2"},
+			chosen: "b", key: trace.TieBreakLength,
 		},
 		{
 			name: "one candidate is not a tie", among: []string{"c"},
@@ -217,7 +244,7 @@ func TestTieBreak(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			chosen, key := tieBreak(tc.among, all, tc.norm)
+			chosen, key := tieBreak(tc.among, all, texts(tc.norm))
 			if chosen != tc.chosen || key != tc.key {
 				t.Errorf("tieBreak(%v) = %q by %q, want %q by %q", tc.among, chosen, key, tc.chosen, tc.key)
 			}
@@ -232,15 +259,170 @@ func TestRankedFollowsTheScore(t *testing.T) {
 		Candidates: []string{"a", "b", "c"},
 		Wins:       map[string]int{},
 		Pairs: []trace.JudgePair{
-			{Pair: []string{"a", "b"}, Orders: []trace.JudgeOrder{{}, {}}, Verdict: "b"},
-			{Pair: []string{"a", "c"}, Orders: []trace.JudgeOrder{{}, {}}, Verdict: trace.VerdictDraw, DrawReason: trace.DrawTie},
-			{Pair: []string{"b", "c"}, Orders: []trace.JudgeOrder{{}, {}}, Verdict: "b"},
+			won("a", "b", "b"), drew("a", "c"), won("b", "c", "b"),
 		},
 	}
-	Aggregate(rep, map[string]string{"a": "aa", "b": "bb", "c": "c"})
+	// b wins both its pairs; a and c drew, which is half a win each, so the
+	// shorter of the two ranks above the other.
+	Aggregate(rep, texts(map[string]string{"a": "aa", "b": "bb", "c": "c"}))
 	if got := strings.Join(rep.Ranked, ","); got != "b,c,a" {
 		t.Errorf("ranked %q, want b,c,a (scores %v)", got, rep.Scores)
 	}
+}
+
+// A verdict is recomputed from the orders, never inherited. Aggregate is
+// exported, so a report can arrive with a verdict on it; scoring that as a
+// win while also counting the pair as a draw would pay a candidate for a
+// pair the judge never decided.
+func TestAggregateRecomputesTheVerdict(t *testing.T) {
+	stale := drew("a", "b")
+	stale.Verdict, stale.DrawReason = "b", trace.DrawInvalid
+	rep := &trace.JudgeReport{Candidates: []string{"a", "b"}, Wins: map[string]int{}, Pairs: []trace.JudgePair{stale}}
+	Aggregate(rep, texts(map[string]string{"a": "alpha", "b": "beta"}))
+	if p := rep.Pairs[0]; p.Verdict != trace.VerdictDraw || p.DrawReason != trace.DrawTie {
+		t.Fatalf("pair %+v", p)
+	}
+	if rep.Scores["a"] != 0.5 || rep.Scores["b"] != 0.5 {
+		t.Errorf("scores %v", rep.Scores)
+	}
+}
+
+// won and drew build a pair as the judge would have left it: both orders
+// answered, and Aggregate recomputes the verdict from them.
+func won(a, b, winner string) trace.JudgePair {
+	first, second := trace.ChoiceA, trace.ChoiceB
+	if winner == b {
+		first, second = trace.ChoiceB, trace.ChoiceA
+	}
+	return trace.JudgePair{Pair: []string{a, b}, Orders: []trace.JudgeOrder{
+		{First: a, Second: b, Choice: first, ChoiceCandidate: winner, Status: trace.JudgeCallOK},
+		{First: b, Second: a, Choice: second, ChoiceCandidate: winner, Status: trace.JudgeCallOK},
+	}}
+}
+
+func drew(a, b string) trace.JudgePair {
+	return trace.JudgePair{Pair: []string{a, b}, Orders: []trace.JudgeOrder{
+		{First: a, Second: b, Choice: trace.ChoiceTie, Status: trace.JudgeCallOK},
+		{First: b, Second: a, Choice: trace.ChoiceTie, Status: trace.JudgeCallOK},
+	}}
+}
+
+// Nothing the run decides may depend on the order the candidates were given
+// in. This runs the whole aggregation over every permutation of that order
+// and demands the same answer, the same scores, the same ranking and the
+// same tie-break record each time — the property the earlier determinism
+// check could not see, because it re-ran one order twice.
+func TestPermutationInvariance(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		norm  map[string]string
+		pairs []trace.JudgePair
+	}{
+		{
+			name:  "a tie the chain parts",
+			norm:  map[string]string{"a": "alpha", "b": "beta", "c": "gamma"},
+			pairs: []trace.JudgePair{drew("a", "b"), drew("a", "c"), drew("b", "c")},
+		},
+		{
+			name:  "two candidates that wrote the same answer",
+			norm:  map[string]string{"a": "same", "b": "same", "c": "other"},
+			pairs: []trace.JudgePair{drew("a", "b"), won("a", "c", "a"), won("b", "c", "b")},
+		},
+		{
+			name:  "a clear winner",
+			norm:  map[string]string{"a": "alpha", "b": "beta", "c": "gamma"},
+			pairs: []trace.JudgePair{won("a", "b", "a"), won("a", "c", "a"), drew("b", "c")},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var want string
+			for _, ids := range permutations([]string{"a", "b", "c"}) {
+				rep := &trace.JudgeReport{Candidates: ids, Wins: map[string]int{}, Pairs: clonePairs(tc.pairs)}
+				Aggregate(rep, texts(tc.norm))
+				got := fmt.Sprintf("outcome=%v scores=%v ranked=%v tie=%+v",
+					rep.Outcome, sortedScores(rep.Scores), rep.Ranked, rep.TieBreak)
+				if want == "" {
+					want = got
+				}
+				if got != want {
+					t.Errorf("order %v: got %s, want %s", ids, got, want)
+				}
+			}
+		})
+	}
+}
+
+// The consensus stage is order-invariant too: which member of the group is
+// returned cannot depend on which proposer happened to be asked first.
+func TestConsensusIsOrderInvariant(t *testing.T) {
+	answers := map[string]string{"a": "1 + 100 = 101", "b": "１０１です。", "c": "たぶん 55"}
+	var want string
+	for _, ids := range permutations([]string{"a", "b", "c"}) {
+		tx := Texts{}
+		for id, ans := range answers {
+			tx[id] = Text{Norm: Normalize(ans), Raw: ans}
+		}
+		cons, tb := consensus(ids, tx)
+		if cons == nil {
+			t.Fatalf("order %v found no consensus", ids)
+		}
+		got := fmt.Sprintf("chosen=%s agreement=%s tie=%+v", cons.Chosen, cons.Agreement, tb)
+		if want == "" {
+			want = got
+		}
+		if got != want {
+			t.Errorf("order %v: got %s, want %s", ids, got, want)
+		}
+	}
+}
+
+func permutations(ids []string) [][]string {
+	if len(ids) <= 1 {
+		return [][]string{ids}
+	}
+	var out [][]string
+	for i := range ids {
+		rest := append(append([]string{}, ids[:i]...), ids[i+1:]...)
+		for _, p := range permutations(rest) {
+			out = append(out, append([]string{ids[i]}, p...))
+		}
+	}
+	return out
+}
+
+func clonePairs(pairs []trace.JudgePair) []trace.JudgePair {
+	out := make([]trace.JudgePair, len(pairs))
+	for i, p := range pairs {
+		out[i] = p
+		out[i].Orders = append([]trace.JudgeOrder{}, p.Orders...)
+	}
+	return out
+}
+
+// sortedScores prints a score map in a fixed order, so comparing two of
+// them compares the scores and not Go's map iteration.
+func sortedScores(sc map[string]float64) string {
+	ids := make([]string, 0, len(sc))
+	for id := range sc {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var b strings.Builder
+	for _, id := range ids {
+		fmt.Fprintf(&b, "%s=%v ", id, sc[id])
+	}
+	return b.String()
+}
+
+// texts turns a table's normalised answers into what the chain reads. The
+// raw text is the normalised text: only a run whose candidates wrote the
+// same normalised answer needs them to differ.
+func texts(norm map[string]string) Texts {
+	tx := Texts{}
+	for id, n := range norm {
+		tx[id] = Text{Norm: n, Raw: n}
+	}
+	return tx
 }
 
 // answers builds an Input from id, answer pairs.
