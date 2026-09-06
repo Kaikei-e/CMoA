@@ -1,0 +1,29 @@
+{
+  "proposer_id": "gemma",
+  "model": "gemma-4-12b",
+  "face": "coding",
+  "status": "ok",
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 884,
+    "completion_tokens": 150
+  },
+  "timings": {
+    "request_ms": 11804,
+    "server_prompt_ms": 125.123,
+    "server_predicted_ms": 11678.877,
+    "tokens_per_second": 12.7
+  },
+  "diff": {
+    "files": [
+      "add.go"
+    ],
+    "additions": 1,
+    "deletions": 1,
+    "sha256": "8e2a16622a9391c36a81f35b5daa51877aa06f101622fa60045123e8f74a0c8b"
+  },
+  "request_sha256": "244bddccd7d37adb2ed04207d0f8c49c8555dd5c2a962221bea6f2fecfb35c16",
+  "response_sha256": "b84ee2d801423466e7b03da589b22ce4045edd4d833f542a5c41750d2c59fc94",
+  "started_at": "2026-01-01T00:00:00.002000000Z",
+  "finished_at": "2026-01-01T00:00:11.800000000Z"
+}

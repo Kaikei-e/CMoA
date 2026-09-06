@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "run_id": "20260101T001000Z-22222222",
+  "rule": "judge-pairwise",
+  "order": [
+    "granite",
+    "qwen",
+    "gemma"
+  ],
+  "selection": {
+    "kind": "no_candidate",
+    "tried": [
+      "granite",
+      "qwen",
+      "gemma"
+    ],
+    "reason": "no_majority"
+  },
+  "also_passed": [],
+  "ranked": [
+    "granite",
+    "gemma",
+    "qwen"
+  ],
+  "max_parallel": 3,
+  "finished_at": "2026-01-01T00:01:58.500000000Z"
+}

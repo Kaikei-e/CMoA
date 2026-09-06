@@ -1,0 +1,2 @@
+<think>Placeholder reasoning for the fixture.</think>
+Candidate answer placeholder for gemma. It gives the shortest correct answer of the three and one worked example.

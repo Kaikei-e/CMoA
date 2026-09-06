@@ -1,0 +1,23 @@
+{
+  "candidate_id": "qwen",
+  "status": "fail",
+  "exit_code": 1,
+  "duration_ms": 3502,
+  "command": [
+    "docker",
+    "compose",
+    "-f",
+    "/srv/example/tasks/task-hello/compose.yaml",
+    "-p",
+    "cmoa-hello-qwen",
+    "run",
+    "--rm",
+    "--no-deps",
+    "-T",
+    "--quiet-pull",
+    "verify"
+  ],
+  "project_name": "cmoa-hello-qwen",
+  "started_at": "2026-01-01T00:00:23.400000000Z",
+  "finished_at": "2026-01-01T00:00:26.900000000Z"
+}

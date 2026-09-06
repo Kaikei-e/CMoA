@@ -34,6 +34,12 @@ whole face behind an OpenAI-compatible endpoint on loopback.
 There is still no dependency outside the Go standard library. What comes
 next, and in what order, is in [docs/roadmap.md](docs/roadmap.md).
 
+A round can be watched while it runs. **CMoA Monitor** under
+[`monitor/`](monitor/) is a separate SvelteKit process that reads the run
+traces and each server's `/slots` and shows one round on one screen; it
+starts nothing and writes nothing
+([ADR 0012](docs/adr/0012-monitor-observes-traces-and-servers.md)).
+
 ```sh
 go build -o bin/cmoa ./cmd/cmoa
 cd examples/task-hello && ./setup.sh

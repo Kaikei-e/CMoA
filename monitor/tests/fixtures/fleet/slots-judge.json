@@ -1,0 +1,77 @@
+[
+  {
+    "id": 0,
+    "n_ctx": 4096,
+    "speculative": false,
+    "is_processing": true,
+    "id_task": 1800,
+    "n_prompt_tokens": 1556,
+    "n_prompt_tokens_processed": 1556,
+    "n_prompt_tokens_cache": 0,
+    "params": {
+      "seed": 42,
+      "temperature": 0.2,
+      "max_tokens": 256,
+      "n_predict": 256,
+      "stream": false
+    },
+    "next_token": [
+      {
+        "has_next_token": true,
+        "has_new_line": false,
+        "n_remain": 226,
+        "n_decoded": 30
+      }
+    ]
+  },
+  {
+    "id": 1,
+    "n_ctx": 4096,
+    "speculative": false,
+    "is_processing": true,
+    "id_task": 1801,
+    "n_prompt_tokens": 1602,
+    "n_prompt_tokens_processed": 1602,
+    "n_prompt_tokens_cache": 0,
+    "params": {
+      "seed": 42,
+      "temperature": 0.2,
+      "max_tokens": 256,
+      "n_predict": 256,
+      "stream": false
+    },
+    "next_token": [
+      {
+        "has_next_token": true,
+        "has_new_line": false,
+        "n_remain": 244,
+        "n_decoded": 12
+      }
+    ]
+  },
+  {
+    "id": 2,
+    "n_ctx": 4096,
+    "speculative": false,
+    "is_processing": false,
+    "id_task": 1802,
+    "n_prompt_tokens": 1400,
+    "n_prompt_tokens_processed": 0,
+    "n_prompt_tokens_cache": 0,
+    "params": {
+      "seed": 42,
+      "temperature": 0.2,
+      "max_tokens": 256,
+      "n_predict": 256,
+      "stream": false
+    },
+    "next_token": [
+      {
+        "has_next_token": false,
+        "has_new_line": false,
+        "n_remain": -1,
+        "n_decoded": 0
+      }
+    ]
+  }
+]

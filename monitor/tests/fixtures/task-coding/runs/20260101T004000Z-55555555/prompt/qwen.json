@@ -1,0 +1,17 @@
+{
+  "model": "qwen3.5-9b",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Placeholder system prompt."
+    },
+    {
+      "role": "user",
+      "content": "Placeholder user prompt."
+    }
+  ],
+  "temperature": 0.2,
+  "max_tokens": 1024,
+  "seed": 42,
+  "stream": false
+}

@@ -1,0 +1,32 @@
+{
+  "proposer_id": "qwen",
+  "model": "qwen3.5-9b",
+  "face": "chat",
+  "status": "ok",
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 146,
+    "completion_tokens": 240
+  },
+  "timings": {
+    "request_ms": 9498,
+    "server_prompt_ms": 1015.267,
+    "server_predicted_ms": 8482.733,
+    "tokens_per_second": 25.3
+  },
+  "reasoning_bytes": 412,
+  "answer_sha256": "f3cba7c079a9cc7cf09df6d60972fd6bc9bac5e0d2c25af946b263c5bfc18d60",
+  "answer_bytes": 119,
+  "metadata": {
+    "token_len": 240,
+    "chars": 119,
+    "header_count": 0,
+    "list_count": 0,
+    "bold_count": 0,
+    "code_fence_count": 0
+  },
+  "request_sha256": "7788eb5637fa4748b9570762361c2233089eb1e34b9f0b17f14242b307e6bbd9",
+  "response_sha256": "04e8e0c48112ace062fdb890c5d674c9c1ab6daa57a1578f3bcd61956a98573a",
+  "started_at": "2026-01-01T00:00:00.002000000Z",
+  "finished_at": "2026-01-01T00:00:09.500000000Z"
+}

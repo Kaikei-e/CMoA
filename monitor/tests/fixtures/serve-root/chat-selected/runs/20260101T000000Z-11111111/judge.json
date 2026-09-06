@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "run_id": "20260101T000000Z-11111111",
+  "judge": {
+    "model": "gpt-oss-20b",
+    "base_url": "http://127.0.0.1:8090/v1",
+    "temperature": 0,
+    "seed": 7,
+    "max_tokens": 512,
+    "output_format": "json_schema",
+    "parallel": 3,
+    "allow_tie": true,
+    "prompt_version": "864b12b7e4105894",
+    "extra_body": {
+      "chat_template_kwargs": {
+        "reasoning_effort": "low"
+      }
+    }
+  },
+  "candidates": [
+    "granite",
+    "qwen",
+    "gemma"
+  ],
+  "presentation": {
+    "seed": 7,
+    "seed_source": "flag",
+    "nonce": "7f3a91c4"
+  },
+  "pairs": [
+    {
+      "pair": [
+        "granite",
+        "qwen"
+      ],
+      "orders": [
+        {
+          "first": "granite",
+          "second": "qwen",
+          "choice": "A",
+          "choice_candidate": "granite",
+          "status": "ok",
+          "retries": 0,
+          "latency_ms": 19098,
+          "request_sha256": "f9432992ae80747374bd8d97643285affe0466dfacec01fabd0c8c5aa8427505",
+          "response_sha256": "1193b4191a856cc1471d5def57ce2fd25b43943fe1e1162c8260e06ebe97cda3",
+          "file": "judge/0-ab.json"
+        },
+        {
+          "first": "qwen",
+          "second": "granite",
+          "choice": "tie",
+          "status": "ok",
+          "retries": 0,
+          "latency_ms": 13112,
+          "request_sha256": "44995bd6470a1159aa14703e9a8b3c3fac81f856458f32516f4aa76f1b0f2f57",
+          "response_sha256": "f63cf5ae7667d44408958e352ea6bd9c5243dbe69b5e4c1402f58989f0d3b9be",
+          "file": "judge/0-ba.json"
+        }
+      ],
+      "verdict": "draw",
+      "draw_reason": "tie"
+    },
+    {
+      "pair": [
+        "granite",
+        "gemma"
+      ],
+      "orders": [
+        {
+          "first": "granite",
+          "second": "gemma",
+          "choice": "B",
+          "choice_candidate": "gemma",
+          "status": "ok",
+          "retries": 0,
+          "latency_ms": 20928,
+          "request_sha256": "e39cd92cdb815cd9ecd1a1be1bed8fea854e4cd57cc556141186eed7d6a376f9",
+          "response_sha256": "7116a161228a57b7f258f934873081f71f6b24750b11bbe486571cc05642d1e1",
+          "file": "judge/1-ab.json"
+        },
+        {
+          "first": "gemma",
+          "second": "granite",
+          "choice": "A",
+          "choice_candidate": "gemma",
+          "status": "ok",
+          "retries": 0,
+          "latency_ms": 14896,
+          "request_sha256": "da77f0141c4aaedeaaea29e752b2f2d5d9acff99a97e1ab10f2a03adfed5ee0e",
+          "response_sha256": "6762af69b5c7c89919dd01cbdef4838b477c316ec98b4dee4297734332b3a23f",
+          "file": "judge/1-ba.json"
+        }
+      ],
+      "verdict": "gemma"
+    },
+    {
+      "pair": [
+        "qwen",
+        "gemma"
+      ],
+      "orders": [
+        {
+          "first": "qwen",
+          "second": "gemma",
+          "choice": "B",
+          "choice_candidate": "gemma",
+          "status": "ok",
+          "retries": 0,
+          "latency_ms": 16181,
+          "request_sha256": "d25c4aaa3859251ed9c73a69345d59213ee1bf54cb515ca96b263bd6fb0d21ec",
+          "response_sha256": "da25e96ec0ce99ac5f469bf82c06e2c4fa2a51d8308c18edabb799336d0d4eb8",
+          "file": "judge/2-ab.json"
+        },
+        {
+          "first": "gemma",
+          "second": "qwen",
+          "choice": "A",
+          "choice_candidate": "gemma",
+          "status": "ok",
+          "retries": 0,
+          "latency_ms": 16677,
+          "request_sha256": "f514743fe597ba002a5776490d58cb3cc4b34e71bb04797e9d009bdac0bf5c8f",
+          "response_sha256": "3a81c74e6a1b323f7adc81df2a9f02e58d62f63dbe5b60f3078e8fc3e1058f3e",
+          "file": "judge/2-ba.json"
+        }
+      ],
+      "verdict": "gemma"
+    }
+  ],
+  "wins": {
+    "gemma": 2,
+    "granite": 0,
+    "qwen": 0
+  },
+  "outcome": {
+    "kind": "selected",
+    "candidate_id": "gemma",
+    "reason": "condorcet winner, 2 of 3 pairs agreed under both orders"
+  },
+  "ranked": [
+    "gemma",
+    "granite",
+    "qwen"
+  ],
+  "draw_reasons": {
+    "tie": 1
+  },
+  "swap_consistent_pairs": 2,
+  "invalid_output_retries": 0,
+  "sanitized": [],
+  "injection_flags": {
+    "granite": [],
+    "qwen": [],
+    "gemma": []
+  },
+  "usage": {
+    "prompt_tokens": 8548,
+    "completion_tokens": 867
+  },
+  "latency_ms": 100000,
+  "finished_at": "2026-01-01T00:01:55.000000000Z"
+}

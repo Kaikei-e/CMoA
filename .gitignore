@@ -4,3 +4,8 @@ local/
 /bin/
 examples/*/repo/
 examples/*/runs/
+monitor/node_modules/
+monitor/build/
+monitor/.svelte-kit/
+monitor/test-results/
+monitor/playwright-report/

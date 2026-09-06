@@ -1,0 +1,29 @@
+{
+  "proposer_id": "granite",
+  "model": "granite-4.2-8b",
+  "face": "coding",
+  "status": "ok",
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 884,
+    "completion_tokens": 70
+  },
+  "timings": {
+    "request_ms": 4649,
+    "server_prompt_ms": 125.123,
+    "server_predicted_ms": 4523.877,
+    "tokens_per_second": 15.2
+  },
+  "diff": {
+    "files": [
+      "add.go"
+    ],
+    "additions": 1,
+    "deletions": 1,
+    "sha256": "8e2a16622a9391c36a81f35b5daa51877aa06f101622fa60045123e8f74a0c8b"
+  },
+  "request_sha256": "e73e7c4f0695798c3ed7c4819d4b40db034ea37c91dc54d36678739fa53424be",
+  "response_sha256": "be19c37b83c3466276f58e23c6328cf554dbd6ceaa00c199c5f89f83b10fe5f2",
+  "started_at": "2026-01-01T00:00:00.002000000Z",
+  "finished_at": "2026-01-01T00:00:04.600000000Z"
+}

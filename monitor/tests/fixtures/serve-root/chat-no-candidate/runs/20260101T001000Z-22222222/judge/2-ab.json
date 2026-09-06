@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "run_id": "20260101T001000Z-22222222",
+  "pair": 2,
+  "order": "ab",
+  "first": "qwen",
+  "second": "gemma",
+  "model": "gpt-oss-20b",
+  "base_url": "http://127.0.0.1:8090/v1",
+  "attempts": [
+    {
+      "messages": [
+        {
+          "role": "system",
+          "content": "Placeholder judge system prompt for the fixture."
+        },
+        {
+          "role": "user",
+          "content": "Placeholder judge user prompt for the fixture."
+        }
+      ],
+      "request": {
+        "chat_template_kwargs": {
+          "reasoning_effort": "low"
+        },
+        "max_tokens": 512,
+        "messages": [
+          {
+            "role": "system",
+            "content": "Placeholder judge system prompt for the fixture."
+          },
+          {
+            "role": "user",
+            "content": "Placeholder judge user prompt for the fixture."
+          }
+        ],
+        "model": "gpt-oss-20b",
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "verdict",
+            "strict": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string",
+                  "maxLength": 400
+                },
+                "choice": {
+                  "type": "string",
+                  "enum": [
+                    "A",
+                    "B",
+                    "tie"
+                  ]
+                }
+              },
+              "required": [
+                "reason",
+                "choice"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "seed": 7,
+        "stream": false,
+        "temperature": 0
+      },
+      "response": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"reason\": \"Placeholder judge reason for the fixture.\", \"choice\": \"A\"}",
+              "reasoning_content": "Placeholder judge reasoning for the fixture."
+            }
+          }
+        ],
+        "created": 1767225600,
+        "model": "gpt-oss-20b",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 206,
+          "prompt_tokens": 1771,
+          "total_tokens": 1977
+        },
+        "id": "chatcmpl-fixture2ab"
+      },
+      "request_sha256": "88e04844850936824ae7c8fc3ee75ccb4e575a1cd101fc5fb5a17201887ddd2a",
+      "response_sha256": "37f735784b556e616dc09e6a36d31864d182799874c5e53d5b2ee496d64a9bfb",
+      "content": "{\"reason\": \"Placeholder judge reason for the fixture.\", \"choice\": \"A\"}",
+      "parsed": {
+        "reason": "Placeholder judge reason for the fixture.",
+        "choice": "A"
+      },
+      "usage": {
+        "prompt_tokens": 1771,
+        "completion_tokens": 206
+      },
+      "latency_ms": 16440
+    }
+  ],
+  "status": "ok",
+  "latency_ms": 16440,
+  "choice": "A",
+  "choice_candidate": "qwen"
+}

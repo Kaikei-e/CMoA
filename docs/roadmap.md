@@ -15,6 +15,18 @@ are not.
 | 6 | uzushio | the first task manifest carries the constraints learned from the previous project: one milestone per session, a ceiling on test lines per product line, dogfooding kept off the critical path | shipped ([uzushio#6](https://github.com/Kaikei-e/uzushio/pull/6), clauses UZ-C-006 to UZ-C-008, 2026-09-05) |
 | 7 | CMoA | chat face: a single blind judge of a different model family, position-swapped pairwise presentation with a seeded nonce, `cmoa judge` and `cmoa serve` ([ADR 0011](adr/0011-chat-face-blind-pairwise-judge-and-serve.md)); uzushio's calibration log (three kappas with named tie handling, expiring `calibration` documents) | shipped ([CMoA#7](https://github.com/Kaikei-e/CMoA/pull/7), [uzushio#7](https://github.com/Kaikei-e/uzushio/pull/7), 2026-09-06; first calibration verdict: uncalibrated) |
 
+## Tooling
+
+Alongside the numbered steps, and outside their order because it has no
+verifier of its own:
+
+- **CMoA Monitor** (`monitor/`, 2026-09-06): a single-screen web view of
+  one round — proposer lanes, the judge's pair-by-order grid, the
+  selection and a phase timeline — with the fleet's health, the run
+  history and a file inspector beside it. It reads run traces and each
+  server's `/slots`, and starts nothing
+  ([ADR 0012](adr/0012-monitor-observes-traces-and-servers.md)).
+
 ## What v1 does not do
 
 - **The judge never writes an answer.** It compares candidates and picks

@@ -1,0 +1,23 @@
+{
+  "candidate_id": "gemma",
+  "status": "pass",
+  "exit_code": 0,
+  "duration_ms": 3201,
+  "command": [
+    "docker",
+    "compose",
+    "-f",
+    "/srv/example/tasks/task-hello/compose.yaml",
+    "-p",
+    "cmoa-hello-gemma",
+    "run",
+    "--rm",
+    "--no-deps",
+    "-T",
+    "--quiet-pull",
+    "verify"
+  ],
+  "project_name": "cmoa-hello-gemma",
+  "started_at": "2026-01-01T00:00:27.000000000Z",
+  "finished_at": "2026-01-01T00:00:30.200000000Z"
+}

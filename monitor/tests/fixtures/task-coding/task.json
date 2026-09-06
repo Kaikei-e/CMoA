@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "id": "hello",
+  "repo": "repo",
+  "rev": "HEAD",
+  "files": [
+    "add.go",
+    "add_test.go"
+  ],
+  "instruction": "instruction.md",
+  "verify": {
+    "kind": "exit-code"
+  }
+}

@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Eleven records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
+Twelve records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
 trace schema in [../trace-schema.md](../trace-schema.md) are what the binary does, so a record is
 read for *why* a flag, a status name or a file exists, and the code for what it accepts today.
 Records 0002 onward are written in Japanese, the language they were argued in.
@@ -147,3 +147,13 @@ verdict is one JSON object with the reason before the choice. `cmoa judge` runs 
 externally supplied answers so the layer above can calibrate the judge against human labels; `cmoa
 serve` puts the face behind OpenAI-compatible HTTP and answers a `NoCandidate` with a 502 rather than
 a guess. It supersedes 0009 and keeps everything 0009 decided about the coding face.
+
+## [0012 — the monitor observes; it starts nothing](0012-monitor-observes-traces-and-servers.md)
+
+The record that puts a screen on a round without adding a seventh command. CMoA Monitor is a
+separate SvelteKit process under `monitor/`; it reads the write-once trace directory and each
+server's read-only `/slots`, derives the same lane, pair-grid, selection and timeline states the
+terminal watcher showed, and pushes them over server-sent events. It never starts `propose` or
+`select`, never posts to `serve`, and writes nothing, so the one who ran a round is still the only
+one who wrote its trace. Configuration is `cmoa.json` plus the directories to watch, never a second
+list of proposers. Depends on 0007 and 0011.
