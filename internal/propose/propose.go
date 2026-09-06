@@ -50,8 +50,12 @@ type Options struct {
 	Harness     *harnessdir.Dir // nil means no harness directory
 	Seed        *int64          // overrides every proposer's seed
 	Temperature *float64        // overrides every proposer's temperature
-	Log         func(format string, args ...any)
-	Now         func() time.Time
+	// Replayed marks a chat run whose candidates and judge answers come
+	// from a run already made rather than from anything asked today. It is
+	// External's alone; a proposer pool cannot be replayed.
+	Replayed *trace.Replayed
+	Log      func(format string, args ...any)
+	Now      func() time.Time
 }
 
 // Run performs propose for t and returns the run directory. The harness
@@ -204,6 +208,10 @@ func External(ctx context.Context, cfg *config.Config, t *task.Task, answers []E
 		return "", err
 	}
 	run.CandidatesOrigin = trace.OriginExternal
+	if opt.Replayed != nil {
+		run.CandidatesOrigin = trace.OriginReplay
+		run.Replayed = opt.Replayed
+	}
 	run.Proposers = nil
 	run.Byzantine = trace.Byzantine{N: len(answers), F: (len(answers) - 1) / 3}
 	for i, a := range answers {

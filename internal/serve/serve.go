@@ -39,6 +39,7 @@ import (
 
 	"github.com/Kaikei-e/CMoA/internal/config"
 	"github.com/Kaikei-e/CMoA/internal/harnessdir"
+	"github.com/Kaikei-e/CMoA/internal/judge"
 	"github.com/Kaikei-e/CMoA/internal/llm"
 	"github.com/Kaikei-e/CMoA/internal/propose"
 	"github.com/Kaikei-e/CMoA/internal/selection"
@@ -275,7 +276,7 @@ func (s *Server) answer(ctx context.Context, req request) (*answered, error) {
 		return nil, err
 	}
 	sel, err := selection.RunChat(ctx, s.cfg, t, dir, selection.ChatOptions{
-		Client: s.opt.Client, Log: s.opt.Log, Now: s.opt.Now,
+		Client: judge.Live{Client: s.opt.Client}, Log: s.opt.Log, Now: s.opt.Now,
 	})
 	if err != nil {
 		return nil, err

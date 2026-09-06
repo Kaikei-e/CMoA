@@ -78,8 +78,10 @@ type Input struct {
 
 // Judge asks one endpoint and writes what it answered.
 type Judge struct {
-	Cfg    *config.Judge
-	Client *llm.Client
+	Cfg *config.Judge
+	// Client performs the calls. Live speaks HTTP; a Replayer answers from
+	// a run already made.
+	Client Completer
 	Dir    trace.Dir
 	Now    func() time.Time
 	// Log is called from the goroutine that made each call, so it must be
@@ -299,7 +301,8 @@ func (j *Judge) ask(ctx context.Context, in Input, pi prompt.JudgeInput, pair in
 			msgs = append(append([]llm.Message{}, messages...), llm.Message{Role: task.RoleUser, Content: RetryInstruction})
 			out.Retries++
 		}
-		at, answer, status := j.one(ctx, msgs, key, body, in.AllowTie, now)
+		at, answer, status := j.one(ctx, msgs, key, body, in.AllowTie, now,
+			Call{Pair: pair, Order: order, Attempt: attempt})
 		rec.Attempts = append(rec.Attempts, at)
 		out.RequestSHA256, out.ResponseSHA256 = at.RequestSHA256, at.ResponseSHA256
 		if status == trace.JudgeCallOK {
@@ -326,7 +329,7 @@ func (j *Judge) ask(ctx context.Context, in Input, pi prompt.JudgeInput, pair in
 // RetryInstruction is the one thing appended when an answer did not parse.
 const RetryInstruction = "Return only the JSON object."
 
-func (j *Judge) one(ctx context.Context, msgs []llm.Message, key string, body map[string]json.RawMessage, allowTie bool, now func() time.Time) (trace.JudgeAttempt, *trace.JudgeAnswer, trace.JudgeCallStatus) {
+func (j *Judge) one(ctx context.Context, msgs []llm.Message, key string, body map[string]json.RawMessage, allowTie bool, now func() time.Time, call Call) (trace.JudgeAttempt, *trace.JudgeAnswer, trace.JudgeCallStatus) {
 	at := trace.JudgeAttempt{Messages: toTraceMessages(msgs)}
 	req := llm.Request{
 		BaseURL: j.Cfg.BaseURL, APIKey: key, Model: j.Cfg.Model, Messages: msgs,
@@ -335,7 +338,7 @@ func (j *Judge) one(ctx context.Context, msgs []llm.Message, key string, body ma
 	started := now()
 	callCtx, cancel := context.WithTimeout(ctx, time.Duration(j.Cfg.TimeoutSeconds)*time.Second)
 	defer cancel()
-	resp, err := j.Client.ChatCompletion(callCtx, req)
+	resp, err := j.Client.ChatCompletion(callCtx, call, req)
 	at.LatencyMS = now().Sub(started).Milliseconds()
 	if err != nil {
 		at.Error = err.Error()
