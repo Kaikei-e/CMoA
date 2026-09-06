@@ -28,5 +28,6 @@
 		"vite": "^8.0.16",
 		"vitest": "^4.1.8"
 	},
-	"description": "Read-only HUD for CMoA runs and the local model fleet."
+	"description": "Read-only HUD for CMoA runs and the local model fleet.",
+	"packageManager": "pnpm@11.9.0"
 }
