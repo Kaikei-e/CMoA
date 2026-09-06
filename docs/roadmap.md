@@ -11,9 +11,9 @@ are not.
 | 2 | uzushio | vault configuration written in Go; `docdag lint` and `lint --fixtures` pass | shipped ([uzushio#1](https://github.com/Kaikei-e/uzushio/pull/1), 2026-09-05) |
 | 3 | uzushio | `task doctor`: kill rate against injected defects, false-positive rate against a reference solution; `task mutate` for Go mutants; `task calibrate` for banded verifiers. CMoA contributes `cmoa verify` with the `exit-code` and `band` kinds and `task.json` version 2 ([ADR 0009](adr/0009-add-verify-command-and-task-v2.md)) | shipped ([uzushio#2](https://github.com/Kaikei-e/uzushio/pull/2), [#4](https://github.com/Kaikei-e/uzushio/pull/4), [#5](https://github.com/Kaikei-e/uzushio/pull/5), 2026-09-05) |
 | 4 | **CMoA** | **v0, coding face: `propose` and `select`, verifier-selected, no judge** | shipped (this repository) |
-| 5 | uzushio | `run` and `improve`: held-in and held-out splits, sequential testing, edits accepted only when both pass | pending |
-| 6 | uzushio | the first task manifest carries the constraints learned from the previous project: one milestone per session, a ceiling on test lines per product line, dogfooding kept off the critical path | pending |
-| 7 | CMoA | chat face: a single blind judge on a separate accelerator, randomised and position-swapped presentation, calibration log | after 1–6 |
+| 5 | uzushio | `run` and `improve`: held-in and held-out splits, sequential testing, edits accepted only when both pass. CMoA contributes `propose --harness`, `--seed` and `--temperature` ([ADR 0010](adr/0010-harness-directory.md)) | shipped ([uzushio#6](https://github.com/Kaikei-e/uzushio/pull/6), 2026-09-05) |
+| 6 | uzushio | the first task manifest carries the constraints learned from the previous project: one milestone per session, a ceiling on test lines per product line, dogfooding kept off the critical path | shipped ([uzushio#6](https://github.com/Kaikei-e/uzushio/pull/6), clauses UZ-C-006 to UZ-C-008, 2026-09-05) |
+| 7 | CMoA | chat face: a single blind judge on a separate accelerator, randomised and position-swapped presentation, calibration log | in progress |
 
 ## What v0 does not do
 
