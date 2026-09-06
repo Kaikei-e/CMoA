@@ -33,6 +33,8 @@ export interface ServeConfig {
 	listen: string;
 	/** Absolute: `runs_dir` is resolved against the directory holding cmoa.json. */
 	runsDir: string;
+	/** `serve.pool_name`: the model id `cmoa serve` answers to. Defaults to `cmoa`. */
+	poolName: string;
 }
 
 export interface MonitorConfig {

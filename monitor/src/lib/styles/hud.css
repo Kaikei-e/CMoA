@@ -3,7 +3,7 @@
  *
  * Rules this file keeps to:
  *  - text is read from a three-step desaturated ramp; saturated colour is
- *    reserved for meaning (state) or for small non-reading marks (the sweep);
+ *    reserved for meaning (state) or for small non-reading marks (lock rails);
  *  - nothing animates a geometry property, only `transform` and `opacity`;
  *  - one blink rate in the whole UI, 1.25 Hz, on a 3 px rail, never on glyphs;
  *  - every motion has an off switch, from the OS and from the MOTION control.
@@ -34,7 +34,7 @@
 	--c-alert: #ff8a7a;
 	--c-alert-pure: #ff4136; /* accents only, never body text */
 	--c-info: #8fd8e8;
-	--c-sweep: #00ff41; /* sweep and lock marks only */
+	--c-sweep: #00ff41; /* lock marks and selected rails only */
 
 	/* rhythm */
 	--sp: 8px;
@@ -49,12 +49,6 @@
 		monospace;
 
 	color-scheme: dark;
-}
-
-@property --sweep-angle {
-	syntax: '<angle>';
-	inherits: false;
-	initial-value: 0deg;
 }
 
 /* ------------------------------------------------------------------- reset */
@@ -426,85 +420,15 @@ button {
 	}
 }
 
-/* ------------------------------------------------------------------- radar */
-
-.radar {
-	position: relative;
-	width: 46px;
-	height: 46px;
-	flex: none;
-	border-radius: 50%;
-	border: 1px solid var(--c-line-2);
-	overflow: hidden;
-	background:
-		repeating-radial-gradient(
-			circle at 50% 50%,
-			rgba(0, 255, 65, 0.13) 0 1px,
-			rgba(0, 0, 0, 0) 1px 8px
-		),
-		repeating-conic-gradient(
-			from 0deg at 50% 50%,
-			rgba(0, 255, 65, 0.12) 0deg 0.6deg,
-			rgba(0, 0, 0, 0) 0.6deg 45deg
-		),
-		var(--c-bg-2);
-}
-
-.radar__sweep {
-	position: absolute;
-	inset: 0;
-	border-radius: 50%;
-	pointer-events: none;
-	mix-blend-mode: screen;
-	will-change: transform;
-	background: conic-gradient(
-		from var(--sweep-angle) at 50% 50%,
-		rgba(0, 255, 65, 0.5) 0deg,
-		rgba(0, 255, 65, 0.2) 14deg,
-		rgba(0, 255, 65, 0.07) 40deg,
-		rgba(0, 255, 65, 0) 95deg,
-		rgba(0, 255, 65, 0) 360deg
-	);
-	animation: radar-sweep 4s linear infinite;
-}
-
-@keyframes radar-sweep {
-	from {
-		--sweep-angle: 0deg;
-	}
-	to {
-		--sweep-angle: 360deg;
-	}
-}
-
-@supports not (background: conic-gradient(from var(--sweep-angle) at 50% 50%, red, blue)) {
-	.radar__sweep {
-		animation: radar-rotate 4s linear infinite;
-	}
-	@keyframes radar-rotate {
-		from {
-			transform: rotate(0deg);
-		}
-		to {
-			transform: rotate(360deg);
-		}
-	}
-}
-
 /* ------------------------------------------------------------------ motion */
 
 /*
  * Two switches, and they must agree: the OS preference and the MOTION control
  * (WCAG 2.2.2 asks for a control the page itself provides).
- * Reducing is not deleting — the sweep parks, the range rings stay, the alert
- * rail stops blinking and becomes permanently lit with an outline.
+ * Reducing is not deleting — the state fades stop, the alert rail stops blinking
+ * and becomes permanently lit with an outline.
  */
 @media (prefers-reduced-motion: reduce) {
-	.radar__sweep {
-		animation: none !important;
-		--sweep-angle: 315deg;
-		transform: none !important;
-	}
 	.alert-rail::before {
 		animation: none !important;
 		opacity: 1 !important;
@@ -518,12 +442,6 @@ button {
 		transition-duration: 0.01ms !important;
 		scroll-behavior: auto !important;
 	}
-}
-
-.hud.no-motion .radar__sweep {
-	animation: none !important;
-	--sweep-angle: 315deg;
-	transform: none !important;
 }
 
 .hud.no-motion .alert-rail::before {

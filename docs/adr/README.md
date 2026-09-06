@@ -148,12 +148,14 @@ externally supplied answers so the layer above can calibrate the judge against h
 serve` puts the face behind OpenAI-compatible HTTP and answers a `NoCandidate` with a 502 rather than
 a guess. It supersedes 0009 and keeps everything 0009 decided about the coding face.
 
-## [0012 — the monitor observes; it starts nothing](0012-monitor-observes-traces-and-servers.md)
+## [0012 — the monitor observes, and asks for a round only as a client of `serve`](0012-monitor-observes-traces-and-servers.md)
 
 The record that puts a screen on a round without adding a seventh command. CMoA Monitor is a
 separate SvelteKit process under `monitor/`; it reads the write-once trace directory and each
 server's read-only `/slots`, derives the same lane, pair-grid, selection and timeline states the
-terminal watcher showed, and pushes them over server-sent events. It never starts `propose` or
-`select`, never posts to `serve`, and writes nothing, so the one who ran a round is still the only
-one who wrote its trace. Configuration is `cmoa.json` plus the directories to watch, never a second
-list of proposers. Depends on 0007 and 0011.
+terminal watcher showed, and pushes them over server-sent events. It never runs `propose` or
+`select` itself and writes nothing: its chat panel relays a conversation to `cmoa serve` exactly as
+any other client would, so `serve` runs the round and writes the trace, and the monitor pins that
+run on screen. A `no_candidate` is shown as the fault it is, never patched over by a human pick or
+a retry. Configuration is `cmoa.json` plus the directories to watch, never a second list of
+proposers. Depends on 0007 and 0011.

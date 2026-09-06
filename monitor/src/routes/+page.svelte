@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { page } from '$app/state';
+	import { comm } from '$lib/client/comm.svelte';
 	import { monitor } from '$lib/client/monitor.svelte';
 	import Boot from '$lib/components/Boot.svelte';
 	import CalibrationTile from '$lib/components/CalibrationTile.svelte';
+	import CommPanel from '$lib/components/CommPanel.svelte';
 	import FleetBand from '$lib/components/FleetBand.svelte';
 	import InspectDrawer from '$lib/components/InspectDrawer.svelte';
 	import JudgeGrid from '$lib/components/JudgeGrid.svelte';
 	import Lanes from '$lib/components/Lanes.svelte';
-	import Legend from '$lib/components/Legend.svelte';
 	import LinkLamp from '$lib/components/LinkLamp.svelte';
 	import Panel from '$lib/components/Panel.svelte';
 	import RoundHeader from '$lib/components/RoundHeader.svelte';
@@ -81,6 +82,10 @@
 			case 'F':
 				void monitor.follow();
 				break;
+			case 'c':
+			case 'C':
+				document.getElementById('comm-input')?.focus();
+				break;
 			case 'Escape':
 				monitor.closeDrawer();
 				break;
@@ -99,7 +104,7 @@
 <div class="hud" class:no-motion={!monitor.motion}>
 	<header class="rail">
 		<h1 class="rail__brand">CMoA <span class="t-3">MONITOR</span></h1>
-		<span class="rail__sub t-3">read-only</span>
+		<span class="rail__sub t-3">observe · comm</span>
 		<span class="rail__spacer"></span>
 		<nav class="rail__actions" aria-label="drawers">
 			<button
@@ -174,7 +179,12 @@
 					</dd>
 				</dl>
 			</Panel>
-			<Legend />
+			<CommPanel
+				{comm}
+				serve={monitor.fleet?.serve ?? null}
+				nowMs={monitor.nowMs}
+				onpin={(id) => monitor.pin(id)}
+			/>
 		</div>
 	</div>
 

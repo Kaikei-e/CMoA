@@ -23,8 +23,10 @@ verifier of its own:
 - **CMoA Monitor** (`monitor/`, 2026-09-06): a single-screen web view of
   one round — proposer lanes, the judge's pair-by-order grid, the
   selection and a phase timeline — with the fleet's health, the run
-  history and a file inspector beside it. It reads run traces and each
-  server's `/slots`, and starts nothing
+  history and a file inspector beside it, and a chat panel that relays a
+  conversation to `cmoa serve` and shows the round it produced. It reads
+  run traces and each server's `/slots`; the round and its trace are
+  `serve`'s
   ([ADR 0012](adr/0012-monitor-observes-traces-and-servers.md)).
 
 ## What v1 does not do

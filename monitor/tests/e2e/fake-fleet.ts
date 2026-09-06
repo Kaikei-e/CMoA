@@ -5,6 +5,10 @@ import type { AddressInfo } from 'node:net';
  * A stand-in for one llama-server. It answers the three routes the monitor
  * asks for and nothing else, and it can be stopped and started again while the
  * suite runs so a test can watch a lane go unreachable.
+ *
+ * The `serve` stand-in also answers `POST /v1/chat/completions`, which is what
+ * the COMM panel relays to. It writes nothing anywhere: the run ids it names
+ * are the fixture runs already on disk, so pinning one shows a real trace.
  */
 
 export type FleetMode = 'idle' | 'prefill' | 'generating';
@@ -39,6 +43,51 @@ function slotDocument(spec: Required<Pick<FakeServerSpec, 'slots' | 'mode'>>): u
 		});
 	}
 	return out;
+}
+
+/** Fixture runs the canned completions point at, so a pinned run exists. */
+export const CANNED_RUN_OK = '20260101T000000Z-11111111';
+export const CANNED_RUN_NO_CANDIDATE = '20260101T001000Z-22222222';
+
+/** The canned 200: one answer plus the `cmoa` extension `cmoa serve` adds. */
+function cannedCompletion(): unknown {
+	return {
+		id: `chatcmpl-${CANNED_RUN_OK}`,
+		object: 'chat.completion',
+		created: 1767225600,
+		model: 'cmoa',
+		choices: [
+			{
+				index: 0,
+				message: { role: 'assistant', content: 'The pool answers: a fixture answer.' },
+				finish_reason: 'stop'
+			}
+		],
+		usage: { prompt_tokens: 120, completion_tokens: 42, total_tokens: 162 },
+		cmoa: {
+			run_id: CANNED_RUN_OK,
+			selection: { kind: 'selected', reason: 'majority' },
+			judge: {
+				calls: 6,
+				swap_consistent_pairs: 2,
+				invalid_output_retries: 0,
+				latency_ms: 23_200
+			},
+			candidates: { asked: 3, ok: 3 }
+		}
+	};
+}
+
+/** The canned 502: the shape `selection.NoCandidate` produces. */
+function cannedNoCandidate(): unknown {
+	return {
+		error: {
+			message: 'no candidate was selected: all_draws',
+			type: 'no_candidate',
+			param: CANNED_RUN_NO_CANDIDATE,
+			code: 'all_draws'
+		}
+	};
 }
 
 export class FakeServer {
@@ -76,6 +125,16 @@ export class FakeServer {
 				return;
 			}
 			if (this.spec.serveOnly) {
+				if (path === '/v1/chat/completions' && request.method === 'POST') {
+					const chunks: Buffer[] = [];
+					request.on('data', (chunk: Buffer) => chunks.push(chunk));
+					request.on('end', () => {
+						const asked = Buffer.concat(chunks).toString('utf8').toLowerCase();
+						if (asked.includes('draw')) send(502, cannedNoCandidate());
+						else send(200, cannedCompletion());
+					});
+					return;
+				}
 				send(404, { error: 'not found' });
 				return;
 			}

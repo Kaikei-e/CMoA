@@ -10,7 +10,7 @@
 
 	const KEY = 'cmoa-monitor:booted';
 	const LINES = [
-		'CMoA MONITOR — read-only observation face',
+		'CMoA MONITOR — observation face, comm via serve',
 		'SYS CHECK ......... OK',
 		'TRACE ROOTS ....... MOUNTED',
 		'FLEET PROBE ....... ARMED',

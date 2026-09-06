@@ -36,8 +36,9 @@ next, and in what order, is in [docs/roadmap.md](docs/roadmap.md).
 
 A round can be watched while it runs. **CMoA Monitor** under
 [`monitor/`](monitor/) is a separate SvelteKit process that reads the run
-traces and each server's `/slots` and shows one round on one screen; it
-starts nothing and writes nothing
+traces and each server's `/slots` and shows one round on one screen. Its
+chat panel relays a conversation to `cmoa serve`, which runs the round and
+writes the trace; the monitor itself writes nothing
 ([ADR 0012](docs/adr/0012-monitor-observes-traces-and-servers.md)).
 
 ```sh
