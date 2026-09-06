@@ -308,16 +308,42 @@ and the judge is asked only when they disagree.
 
 **Stage 1, consensus.** Every answer is normalised — the full-width ASCII
 block and the ideographic space folded to ASCII, lower case, the markdown
-emphasis markers `*` `_` `` ` `` removed, one leading bullet or number
-removed per line, whitespace runs collapsed, trailing `.` `。` `!` `?`
-trimmed. Two normalised answers **agree** when they are the same text, or
-when both are at most 160 runes long, both hold a number, and their last
-numbers are equal once thousands separators are stripped and valueless
-zeros dropped (`276,416`, `276416` and `276416.0` are one number). The last
-number is the answer, because a worked calculation states its operands
-first and its result last; the length bound is what keeps two essays that
-happen to share a figure from counting as agreement. Neither test reads the
-question or the reference answer.
+emphasis markers `*` and `` ` `` removed, every list marker that starts an
+item removed, whitespace runs collapsed, trailing `.` `。` `!` `?` trimmed.
+The underscore is **not** removed: it is a word character, and dropping it
+would make `user_id` and `userid` the same answer. Markers are stripped
+wherever an item starts, not only at the head of a line, because a list
+written on one line — `1. りんご 2. みかん 3. ぶどう` — otherwise keeps a
+last number of 3 and agrees with any short answer ending in three. A marker
+is a marker only at a line start or after a space, and only when what
+follows it is neither a digit nor nothing: `101.` is an answer, `1.101` is
+one decimal number, `1. 答え` is an item.
+
+Two normalised answers **agree** when they are the same text, or when all
+of the following hold: both are at most 160 runes long, both contain a
+number, their last numbers are equal, **and both either deny something or
+neither does**. The last number is the answer, because a worked calculation
+states its operands first and its result last; the length bound keeps two
+essays that happen to share a figure from counting as agreement.
+
+Three rules keep "the last number" from being read too generously:
+
+- **A negation guard.** `3つあります` and `3つではありません` are both short
+  and both end in the same number. Without the guard they were the same
+  answer, at zero judge calls. A small list of negation forms is matched —
+  Japanese ones as substrings, English ones as whole words so `no` does not
+  fire inside `know` — and the two answers must agree about it. The list
+  will miss forms; a missed negation and a spurious one both cost an
+  agreement, so both directions of error fall back on asking the judge.
+- **A separator has a shape.** A `,` or `、` groups thousands only with a
+  digit before it and exactly three digits after it and no fourth, because
+  `、` is also the ordinary Japanese comma: `276,416` is one number, and
+  `候補は 1、2、3 です` is three.
+- **An exponent is one token, kept verbatim.** `1e5` is neither `5` nor
+  `100000`. The miss is safe; the false agreement would not be.
+
+Valueless zeros are dropped, so `276,416`, `276416` and `276416.0` are one
+number. Neither test reads the question or the reference answer.
 
 If a **strict majority** of the candidates mutually agree, one of them is
 selected — which one is the tie-break chain below — and **not one judge
@@ -352,9 +378,9 @@ A candidate that wins every pair it appears in is still the Condorcet
 winner and is still reported as one, with its reason text unchanged.
 Otherwise the highest score is selected — `copeland winner, score 1 of 2
 (no condorcet winner)`. A machine failure outranks the score: an unanswered
-pair that could still have decided escalates to `judge_timeout` or
-`judge_failed` (see below), and a pair no parser could read is
-`invalid_output`.
+pair that could still take a candidate **to the top score** escalates to
+`judge_timeout` or `judge_failed` (see below), and a pair no parser could
+read is `invalid_output`.
 
 So `no_candidate` is now the residual case only:
 
@@ -387,14 +413,19 @@ and a calibration can report each treatment by name rather than folding
 them together.
 
 A pair that was never answered — a timeout, or an endpoint that could not
-be reached — does **not** discard a winner it could not have unseated. If
-one candidate has already beaten every other, no answer to the pair between
-two losers can change that, and the outcome is `selected` with the failed
-pair recorded as `draw_reason: unmeasured`. The outcome becomes
-`judge_timeout` or `judge_failed` only when the missing answers could still
-decide it: when some candidate could still win every pair it appears in if
-each unanswered pair went its way. A timeout outranks a transport error,
-because a timeout is the one a caller retries.
+be reached — does **not** discard a winner it could not have unseated. If a
+candidate leads and no missing answer can catch it, the outcome is
+`selected` with the failed pair recorded as `draw_reason: unmeasured`.
+
+The question is asked in the currency the outcome is decided in. Under the
+score a missing answer does not have to produce a clean sweep to matter:
+half a point is enough to overtake a leader, or to join the tied set the
+chain then parts. So the outcome becomes `judge_timeout` or `judge_failed`
+when some candidate other than the sole top scorer **could still reach the
+top score** if each of its unanswered pairs went its way. The sole leader is
+not counted against itself — more points only confirm it, and any candidate
+that could catch it is checked on its own row. A timeout outranks a
+transport error, because a timeout is the one a caller retries.
 
 The candidates are called `A` and `B` inside a call; which candidate is
 which is only in the trace.
@@ -409,12 +440,23 @@ the key it was is written to `judge.json` as `tie_break`:
 | key | what it prefers |
 | --- | --- |
 | `consensus` | the candidate whose normalised answer agrees with the most **others in the run** — losers included, because agreement with a loser is still agreement |
-| `length` | the uniquely shortest normalised answer, and **only** when the longest tied answer is at least 1.5× the shortest |
-| `hash` | the lowest SHA-256 of the normalised answer's UTF-8 bytes |
+| `length` | the uniquely shortest normalised answer, and **only** when the longest tied answer is at least 1.5× the shortest. It also covers the blank answer: one that normalises to nothing (`***`, `。。。`) is dropped from the tied set before any key runs, unless they all are, and the key recorded is `length` |
+| `hash` | the lowest SHA-256 of the normalised answer's UTF-8 bytes, falling to the digest of the **raw** answer when the normalised texts are equal |
+| `identical` | no key decided: the candidates wrote the same answer to the byte, and the lowest candidate id is returned |
 
 The 1.5 gate is a tunable constant, not a measured optimum. Below it the
 difference is phrasing, and letting a word of politeness pick the answer
 would be a length bias rather than a counter-lever to one.
+
+`identical` is honest bookkeeping rather than a key: it says that nothing
+about the answers could part them. A candidate id is a property of the
+configuration, not of a position — two candidates can be byte-identical and
+still not be a consensus group, because grouping needs a strict majority
+and two of four is not one.
+
+`tie_break.among` and the ids in the outcome's reason are written in
+**ascending id order**, which is the same list whatever order the run
+presented the candidates in.
 
 **No key reads the presentation position, the order the candidates were
 listed in, or the proposer that wrote the answer.** Those are the biases the
@@ -528,8 +570,9 @@ zero and `latency_ms` is the wall time of a run that made no call.
 
 `tie_break` is present whenever more than one candidate was still in
 contention — inside a consensus group, or at the top of the Copeland
-ranking — and names the key that parted them (`consensus`, `length` or
-`hash`). On the judged path it reads:
+ranking — and names the key that parted them (`consensus`, `length`,
+`hash` or `identical`). `among` is in ascending id order. On the judged path
+it reads:
 
 ```json
 "scores": {"p1": 1.5, "p2": 1.5, "p3": 0},
@@ -547,9 +590,9 @@ call file.
 An order's `status` is `ok`, `invalid_output` (still unparsable after the
 one retry), `timeout` or `error` (HTTP or decode failure). A `timeout` or
 an `error` escalates the whole outcome to `judge_timeout` or `judge_failed`
-**only if the pair it broke could still have decided the selection** (see
-above); either way it says nothing about any candidate, because the
-question was never put.
+**only if the pair it broke could still have taken a candidate to the top
+score** (see above); either way it says nothing about any candidate,
+because the question was never put.
 
 `swap_consistent_pairs` counts pairs whose two orders named the **same
 candidate** — including two ties. Choosing `A` in both orders is not

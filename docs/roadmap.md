@@ -43,8 +43,9 @@ verifier of its own:
 - **No fallback that reads position.** A tie at the top of the score is
   broken by a deterministic, recorded chain — agreement with the rest of
   the run, then the shorter answer where the gap is real, then a hash of
-  the answer's own text — and never by "the first", the listed order or
-  the proposer that wrote it. Those are the biases the order swap exists
+  the answer's own text, and for answers identical to the byte the lowest
+  candidate id under its own name — and never by "the first", the listed
+  order or the proposer that wrote it. Those are the biases the order swap exists
   to detect, and they are strongest exactly where a tie-break fires. What
   the chain decided is in `judge.json`'s `tie_break`, so no selection is
   settled by a rule a reader cannot see.

@@ -467,7 +467,7 @@ type consensusInfo struct {
 // tieBreakInfo is present when more than one candidate was still in
 // contention and a deterministic key parted them.
 type tieBreakInfo struct {
-	Key   string `json:"key"`   // consensus, length, or order
+	Key   string `json:"key"`   // consensus, length, hash, or identical
 	Among int    `json:"among"` // how many were tied
 }
 

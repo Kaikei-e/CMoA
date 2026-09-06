@@ -119,13 +119,18 @@ Selection on the chat face is **consensus first, then a Copeland score**.
 
 The candidates are compared with each other before the judge is asked at
 all. Each answer is normalised — full-width forms folded to ASCII, lower
-case, markdown emphasis and list markers stripped, whitespace collapsed,
-trailing punctuation trimmed — and two answers agree when the normalised
-texts are equal, or when both are short, both hold a number, and their last
-numbers match once thousands separators are gone. If a strict majority
-agree, one of them is returned and **no judge call is made**. Three
-proposers answering `101` to `1 + 100` is not a failure to decide; it is
-the strongest evidence the round has.
+case, `*` and backticks stripped, every list marker that starts an item
+stripped, whitespace collapsed, trailing punctuation trimmed. The
+underscore stays, because `user_id` and `userid` are different answers. Two
+answers agree when the normalised texts are equal, or when both are short,
+both hold a number, their last numbers match, **and both either deny
+something or neither does** — `3つあります` and `3つではありません` are not
+the same answer, and without that guard they were one, at zero judge calls.
+A `,` or `、` is a thousands separator only in the shape one has, since
+`、` is also the ordinary Japanese comma; an exponent is one token kept
+verbatim. If a strict majority agree, one of them is returned and **no
+judge call is made**. Three proposers answering `101` to `1 + 100` is not a
+failure to decide; it is the strongest evidence the round has.
 
 When they disagree, the judge runs **round-robin pairwise with an order
 swap**: three pairs, each asked in both orders, six calls. A pair is won
@@ -139,21 +144,27 @@ one; otherwise the highest score is selected.
 A draw nobody could measure — an unparsable answer, a timeout, a call that
 could not be sent — scores nothing, because a machine failure is not a
 judgment. Those still escalate: `invalid_output` is `no_candidate`, and an
-unanswered pair that could still have decided is `judge_timeout` or
-`judge_failed`. So `no_candidate` is the residual case only —
+unanswered pair that could still take a candidate to the top score is
+`judge_timeout` or `judge_failed` — the question is asked in the currency
+the outcome is decided in, so half a point is enough to matter. So `no_candidate` is the residual case only —
 `too_few_candidates` and `invalid_output`. `cycle`, `no_majority` and
 `all_draws` stay in the vocabulary because older traces carry them, and are
 no longer produced.
 
-What the score cannot part is settled by three keys in order, and the key
-that fired is recorded in `judge.json` as `tie_break`: agreement with the
-rest of the run, then the shorter normalised answer *only* where the
-longest is at least 1.5× the shortest, then the lowest SHA-256 of the
-normalised text. **No key reads the presentation position, the listed order
-or the proposer.** Those are the biases the swap exists to detect, and they
-are strongest exactly in the tie region. The hash is arbitrary, but it is
-arbitrary about the answer: the same answers give the same winner in every
-run, on every machine.
+What the score cannot part is settled by keys in order, and the one that
+fired is recorded in `judge.json` as `tie_break`: agreement with the rest
+of the run (`consensus`), then the shorter normalised answer *only* where
+the longest is at least 1.5× the shortest (`length`, which also drops an
+answer that normalises to nothing), then the lowest SHA-256 of the
+normalised text and, if those match, of the raw text (`hash`). Candidates
+that wrote the same answer to the byte are recorded as `identical` and the
+lowest id is returned, rather than claiming a hash decided. **No key reads
+the presentation position, the listed order or the proposer.** Those are
+the biases the swap exists to detect, and they are strongest exactly in the
+tie region. The hash is arbitrary, but it is arbitrary about the answer:
+the same answers give the same winner in every run, on every machine, and
+the tied set is written down in ascending id order whatever order the run
+presented it in.
 
 Every pair still records **why** it drew — `tie`, `disagree`, `invalid` or
 `unmeasured`, counted in `judge.json` as `draw_reasons` — and that word now
@@ -162,10 +173,11 @@ judge reported under one word is the conflation an agreement metric must
 not make, so the split is kept where a calibration can read it.
 
 A pair nobody could answer does not throw away a winner it could not have
-unseated: if one candidate has already beaten every other, a timeout in the
-pair between two losers leaves the selection standing and is recorded as
-`unmeasured`. Only when the missing answers could still decide the outcome
-does it become `judge_timeout` or `judge_failed`.
+unseated: if a candidate leads and no missing answer can catch it, a
+timeout in the pair between two losers leaves the selection standing and is
+recorded as `unmeasured`. Only when a candidate other than the sole leader
+could still reach the top score does it become `judge_timeout` or
+`judge_failed`.
 
 The judge is asked blind. The candidates are labelled `A` and `B` inside a
 call and mapped back only in the trace. Candidate text is fenced with a
