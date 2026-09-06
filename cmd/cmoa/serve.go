@@ -7,7 +7,6 @@ import (
 	"io"
 
 	"github.com/Kaikei-e/CMoA/internal/config"
-	"github.com/Kaikei-e/CMoA/internal/propose"
 	"github.com/Kaikei-e/CMoA/internal/serve"
 )
 
@@ -25,11 +24,10 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer, logf func(st
 	if code, done := parseArgs(fs, args); done {
 		return code
 	}
-	set := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	set := explicitFlags(fs)
 
-	var opt propose.Options
-	if code := loadHarnessFlag(set, *harnessDir, &opt, stderr); code != exitOK {
+	h, code := loadHarnessFlag(set, *harnessDir, stderr)
+	if code != exitOK {
 		return code
 	}
 	path, err := config.Discover(*cfgPath, "")
@@ -54,7 +52,7 @@ func cmdServe(ctx context.Context, args []string, stderr io.Writer, logf func(st
 		return exitUsage
 	}
 	srv, err := serve.New(cfg, serve.Options{
-		AsOf: *asOf, Version: version(), Harness: opt.Harness, Log: logf,
+		AsOf: *asOf, Version: version(), Harness: h, Log: logf,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "cmoa:", err)
