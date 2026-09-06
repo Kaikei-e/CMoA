@@ -1,17 +1,19 @@
 # Architecture decision records
 
-Ten records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
+Eleven records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
 trace schema in [../trace-schema.md](../trace-schema.md) are what the binary does, so a record is
 read for *why* a flag, a status name or a file exists, and the code for what it accepts today.
 Records 0002 onward are written in Japanese, the language they were argued in.
 
-Read **0009 first**: it fixes the scope of v0 — three commands, no daemon, no judge model, Go 1.27 and
-the standard library alone — and the type vocabulary the other records lean on. It supersedes 0002,
-which said the same with two commands; 0002 stays as the record the others were argued against.
+Read **0011 first**: it fixes the scope of v1 — the coding face of v0 plus a chat face with a single
+blind judge, six commands of which only `serve` stays resident, Go 1.27 and the standard library alone —
+and carries forward the type vocabulary the other records lean on. It supersedes 0009, which fixed v0
+at three commands and no judge; 0009 in turn superseded 0002. Both stay as the records the others were
+argued against.
 0003 through 0008 each take one of the four responsibilities CMoA owns and settle it; they depend on
 0002 and, where noted, on each other, and can otherwise be read in any order.
 
-Every record is **Accepted** except 0002, which 0009 superseded on 2026-09-05. A decision that
+Every record is **Accepted** except 0002, which 0009 superseded on 2026-09-05, and 0009, which 0011 superseded on 2026-09-06. A decision that
 replaces one of these declares `supersedes:` in its frontmatter and moves the old record's status to
 `superseded`; nobody edits an accepted record to change what it decided. `docdag validate` is the
 gate that keeps that true.
@@ -108,7 +110,7 @@ cross to the layer above as JSON rather than as Go types, and the internals stay
 Raising an autonomy level means superseding this record, never editing it — a run's trace has to be
 readable against the rules that were in force when it ran.
 
-## [0009 — a third command, `verify`, and `task.json` version 2](0009-add-verify-command-and-task-v2.md)
+## [0009 — a third command, `verify`, and `task.json` version 2](0009-add-verify-command-and-task-v2.md) — superseded by 0011
 
 The record that replaces 0002 and carries all of it forward except the count. uzushio's `task doctor`
 has to measure the verifier — does a known-good solution pass it, does it catch injected defects —
@@ -133,3 +135,15 @@ name-and-description list — and `cmoa propose --harness <dir>` reads it, hashi
 into `harness.render` so the layer above can check it rendered what it meant to. `--seed` and
 `--temperature` pin every proposer for a run, which is what a paired baseline-versus-edit measurement
 needs. CMoA still interprets no vault content; it reads files.
+
+## [0011 — v1: the chat face, a blind pairwise judge, `judge` and `serve`](0011-chat-face-blind-pairwise-judge-and-serve.md)
+
+The record that opens the second face. A chat task is `task.json` version 3 with `face: chat`; the same
+router asks every proposer, and a single judge model of a different family picks one answer by
+round-robin pairwise comparison, both orders per pair, a win only when the orders agree, the Condorcet
+winner selected and everything else an honest `NoCandidate` with its reason. The judge is blind — no
+proposer names, lengths or timings reach it — candidates sit inside nonce-delimited blocks, and the
+verdict is one JSON object with the reason before the choice. `cmoa judge` runs the same protocol over
+externally supplied answers so the layer above can calibrate the judge against human labels; `cmoa
+serve` puts the face behind OpenAI-compatible HTTP and answers a `NoCandidate` with a 502 rather than
+a guess. It supersedes 0009 and keeps everything 0009 decided about the coding face.

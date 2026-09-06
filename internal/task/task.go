@@ -3,11 +3,14 @@
 // revision; candidates are built from that revision, never from the
 // working tree, so a run is reproducible from the trace alone.
 //
-// task.json has two versions. Version 1 is the propose/select manifest.
+// task.json has three versions. Version 1 is the propose/select manifest.
 // Version 2 adds what a verifier doctor needs: a reference solution, a set
-// of mutants, and the thresholds a task considers healthy. Version 1 files
-// keep their exact meaning; the version 2 fields are refused in a version 1
-// file rather than ignored.
+// of mutants, and the thresholds a task considers healthy. Version 3 adds
+// the face: a version 3 coding task carries exactly the version 2 fields,
+// and a chat task carries a conversation, an optional reference answer and
+// an optional rubric instead of a repository. Older files keep their exact
+// meaning; a field a version does not have is refused in it rather than
+// ignored.
 package task
 
 import (
@@ -30,7 +33,8 @@ import (
 type Task struct {
 	ID              TaskID
 	Dir             string // absolute
-	Repo            string // absolute
+	Face            Face   // coding in a version 1 or 2 file
+	Repo            string // absolute; empty on the chat face
 	Rev             string // as written; ResolveRev turns it into a SHA
 	Files           []File
 	Instruction     string
@@ -39,7 +43,47 @@ type Task struct {
 	Reference       *Reference // version 2, nil when the task declares none
 	Mutants         []Mutant   // version 2, empty when the task declares none
 	Doctor          DoctorSpec // defaults even in a version 1 task
+	Chat            *Chat      // the chat face, nil on the coding face
 }
+
+// Face is which half of CMoA a task belongs to. It is a closed
+// enumeration; add a constant, and the exhaustive linter finds every switch
+// that must learn it.
+type Face string
+
+const (
+	// FaceCoding: the proposers answer with a unified diff and a verifier
+	// selects. It is what a version 1 or 2 task.json means.
+	FaceCoding Face = "coding"
+	// FaceChat: the proposers answer a conversation in prose and a judge
+	// selects.
+	FaceChat Face = "chat"
+)
+
+// Chat is everything the chat face adds: the conversation the proposers
+// answer, and the two documents only the judge sees.
+type Chat struct {
+	ConversationPath string // as written in task.json
+	Conversation     []ConvMessage
+	ReferencePath    string // as written; empty when the task declares none
+	ReferenceAnswer  string
+	RubricPath       string // as written; empty when the task declares none
+	Rubric           string
+	AllowTie         bool
+}
+
+// ConvMessage is one message of a chat task's conversation.
+type ConvMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// The roles a conversation message may carry.
+const (
+	RoleSystem    = "system"
+	RoleUser      = "user"
+	RoleAssistant = "assistant"
+)
 
 // File is one repository file the proposers see in full.
 type File struct {
@@ -143,10 +187,11 @@ const (
 	DefaultReferenceRuns   = 3
 	InstructionFile        = "instruction.md"
 	ManifestFile           = "task.json"
+	ConversationFile       = "conversation.json"
 )
 
 // MaxVersion is the newest task.json this build understands.
-const MaxVersion = 2
+const MaxVersion = 3
 
 // ValidationError reports one field of task.json that failed validation.
 type ValidationError struct {
@@ -162,18 +207,27 @@ func (e *ValidationError) Error() string { return "task.json: " + e.Path + ": " 
 type manifest struct {
 	Version         int      `json:"version"`
 	ID              string   `json:"id"`
+	Face            string   `json:"face"`
 	Repo            string   `json:"repo"`
 	Rev             string   `json:"rev"`
 	Files           []string `json:"files"`
+	Conversation    string   `json:"conversation"`
+	Rubric          string   `json:"rubric"`
 	MaxContextBytes int      `json:"max_context_bytes"`
-	Verify          struct {
+	Judge           *struct {
+		// A pointer: a written false must be told apart from "absent,
+		// take the default", which is true.
+		AllowTie *bool `json:"allow_tie"`
+	} `json:"judge"`
+	Verify struct {
 		ComposeFile    string `json:"compose_file"`
 		Service        string `json:"service"`
 		Kind           string `json:"kind"`
 		TimeoutSeconds int    `json:"timeout_seconds"`
 	} `json:"verify"`
 	Reference *struct {
-		Diff string `json:"diff"`
+		Diff   string `json:"diff"`
+		Answer string `json:"answer"`
 	} `json:"reference"`
 	Mutants []manifestMutant `json:"mutants"`
 	Doctor  *struct {
@@ -192,8 +246,30 @@ type manifestMutant struct {
 	Note     string `json:"note"`
 }
 
-// Load reads dir/task.json, dir/instruction.md and every listed file.
-func Load(dir string) (*Task, error) {
+// Option tunes Load.
+type Option func(*options)
+
+type options struct{ log func(string, ...any) }
+
+// WithLog gives Load somewhere to say what a task declared and CMoA
+// ignored. There is one such line — an instruction.md a chat task does not
+// use — and it is a line, not an error: a task directory converted from the
+// coding face keeps the file, and refusing it would be refusing history.
+func WithLog(logf func(format string, args ...any)) Option {
+	return func(o *options) { o.log = logf }
+}
+
+// Load reads dir/task.json and everything the manifest names: on the coding
+// face instruction.md and every listed repository file, on the chat face
+// the conversation and the judge's own documents.
+func Load(dir string, opts ...Option) (*Task, error) {
+	var o options
+	for _, f := range opts {
+		f(&o)
+	}
+	if o.log == nil {
+		o.log = func(string, ...any) {}
+	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -209,16 +285,42 @@ func Load(dir string) (*Task, error) {
 		return nil, fmt.Errorf("task: decode task.json: %w", err)
 	}
 	if m.Version < 1 || m.Version > MaxVersion {
-		return nil, &ValidationError{"version", fmt.Sprintf("must be 1 or %d, got %d", MaxVersion, m.Version)}
+		return nil, &ValidationError{"version", fmt.Sprintf("must be between 1 and %d, got %d", MaxVersion, m.Version)}
+	}
+	if m.Version < 3 {
+		if err := rejectV3Fields(&m); err != nil {
+			return nil, err
+		}
+		m.Face = string(FaceCoding)
 	}
 	if m.Version == 1 {
 		if err := rejectV2Fields(&m); err != nil {
 			return nil, err
 		}
 	}
+	switch Face(m.Face) {
+	case FaceCoding:
+	case FaceChat:
+	case "":
+		return nil, &ValidationError{"face", fmt.Sprintf("is required in version 3; one of [%s %s]", FaceCoding, FaceChat)}
+	default:
+		return nil, &ValidationError{"face", fmt.Sprintf("%q is not a face; one of [%s %s]", m.Face, FaceCoding, FaceChat)}
+	}
 	id, err := ParseTaskID(m.ID)
 	if err != nil {
 		return nil, &ValidationError{"id", err.Error()}
+	}
+	if m.MaxContextBytes == 0 {
+		m.MaxContextBytes = DefaultMaxContextBytes
+	}
+	if m.MaxContextBytes < 1 {
+		return nil, &ValidationError{"max_context_bytes", "must be positive"}
+	}
+	if Face(m.Face) == FaceChat {
+		return loadChat(abs, id, &m, o.log)
+	}
+	if err := rejectChatFields(&m); err != nil {
+		return nil, err
 	}
 	if m.Repo == "" {
 		return nil, &ValidationError{"repo", "is required"}
@@ -233,12 +335,6 @@ func Load(dir string) (*Task, error) {
 	}
 	if m.Rev == "" {
 		m.Rev = DefaultRev
-	}
-	if m.MaxContextBytes == 0 {
-		m.MaxContextBytes = DefaultMaxContextBytes
-	}
-	if m.MaxContextBytes < 1 {
-		return nil, &ValidationError{"max_context_bytes", "must be positive"}
 	}
 	if len(m.Files) == 0 {
 		return nil, &ValidationError{"files", "at least one file is required: the proposers see nothing else"}
@@ -280,6 +376,7 @@ func Load(dir string) (*Task, error) {
 	t := &Task{
 		ID:              id,
 		Dir:             abs,
+		Face:            FaceCoding,
 		Repo:            repo,
 		Rev:             m.Rev,
 		Instruction:     string(inst),
@@ -318,6 +415,184 @@ func Load(dir string) (*Task, error) {
 		return nil, &ValidationError{"files", fmt.Sprintf("instruction and files total %d bytes, over max_context_bytes %d", total, t.MaxContextBytes)}
 	}
 	return t, nil
+}
+
+// loadChat builds a chat task: the conversation the proposers answer, plus
+// the reference answer and the rubric, which only the judge ever sees.
+func loadChat(abs string, id TaskID, m *manifest, logf func(string, ...any)) (*Task, error) {
+	if err := rejectCodingFields(m); err != nil {
+		return nil, err
+	}
+	t := &Task{
+		ID:              id,
+		Dir:             abs,
+		Face:            FaceChat,
+		MaxContextBytes: m.MaxContextBytes,
+		Chat:            &Chat{AllowTie: true},
+	}
+	if m.Judge != nil && m.Judge.AllowTie != nil {
+		t.Chat.AllowTie = *m.Judge.AllowTie
+	}
+	if m.Conversation == "" {
+		m.Conversation = ConversationFile
+	}
+	conv, err := cleanTaskPath(m.Conversation)
+	if err != nil {
+		return nil, &ValidationError{"conversation", err.Error()}
+	}
+	t.Chat.ConversationPath = conv
+	b, err := os.ReadFile(filepath.Join(abs, filepath.FromSlash(conv)))
+	if err != nil {
+		return nil, &ValidationError{"conversation", err.Error()}
+	}
+	if t.Chat.Conversation, err = parseConversation(b); err != nil {
+		return nil, &ValidationError{"conversation", err.Error()}
+	}
+	if m.Reference != nil && m.Reference.Answer != "" {
+		p, body, err := t.readTaskFile(m.Reference.Answer)
+		if err != nil {
+			return nil, &ValidationError{"reference.answer", err.Error()}
+		}
+		t.Chat.ReferencePath, t.Chat.ReferenceAnswer = p, body
+	}
+	if m.Rubric != "" {
+		p, body, err := t.readTaskFile(m.Rubric)
+		if err != nil {
+			return nil, &ValidationError{"rubric", err.Error()}
+		}
+		t.Chat.RubricPath, t.Chat.Rubric = p, body
+	}
+	if _, err := os.Stat(filepath.Join(abs, InstructionFile)); err == nil {
+		logf("task %s: %s is not used on the chat face; the conversation is the task", id, InstructionFile)
+	}
+	if total := t.ContextBytes(); total > t.MaxContextBytes {
+		return nil, &ValidationError{"conversation", fmt.Sprintf("the conversation totals %d bytes, over max_context_bytes %d", total, t.MaxContextBytes)}
+	}
+	return t, nil
+}
+
+// parseConversation decodes and validates the message array a chat task
+// hands the proposers. It must end with a user message: a conversation
+// whose last turn is the assistant's has nothing to answer.
+func parseConversation(b []byte) ([]ConvMessage, error) {
+	if !utf8.Valid(b) {
+		return nil, errors.New("is not valid UTF-8; proposers only see text")
+	}
+	var msgs []ConvMessage
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&msgs); err != nil {
+		return nil, err
+	}
+	if err := ValidateConversation(msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// ValidateConversation checks the shape a chat task and `cmoa serve` both
+// require: at least one message, a known role and non-empty content on
+// every one, and a user message last.
+func ValidateConversation(msgs []ConvMessage) error {
+	if len(msgs) == 0 {
+		return errors.New("at least one message is required")
+	}
+	for i, msg := range msgs {
+		switch msg.Role {
+		case RoleSystem, RoleUser, RoleAssistant:
+		default:
+			return fmt.Errorf("messages[%d].role: %q is not a role; one of [%s %s %s]", i, msg.Role, RoleSystem, RoleUser, RoleAssistant)
+		}
+		if strings.TrimSpace(msg.Content) == "" {
+			return fmt.Errorf("messages[%d].content: must not be empty", i)
+		}
+	}
+	if last := msgs[len(msgs)-1]; last.Role != RoleUser {
+		return fmt.Errorf("the last message is %q; a conversation ends with a %s message, which is what the proposers answer", last.Role, RoleUser)
+	}
+	return nil
+}
+
+// readTaskFile reads one document named by task.json, relative to the task
+// directory. It returns the cleaned path and the body.
+func (t *Task) readTaskFile(p string) (string, string, error) {
+	clean, err := cleanTaskPath(p)
+	if err != nil {
+		return "", "", err
+	}
+	b, err := os.ReadFile(filepath.Join(t.Dir, filepath.FromSlash(clean)))
+	if err != nil {
+		return "", "", err
+	}
+	if !utf8.Valid(b) {
+		return "", "", errors.New(clean + " is not valid UTF-8")
+	}
+	if strings.TrimSpace(string(b)) == "" {
+		return "", "", errors.New(clean + " is empty")
+	}
+	return clean, string(b), nil
+}
+
+// rejectV3Fields refuses a version 3 field in an older file, so version 1
+// and version 2 keep meaning exactly what they meant when they were
+// written. A version 2 file has no face; it is the coding face by
+// definition, and writing the word would make the two spellings differ.
+func rejectV3Fields(m *manifest) error {
+	const msg = "requires version 3"
+	switch {
+	case m.Face != "":
+		return &ValidationError{"face", msg}
+	case m.Conversation != "":
+		return &ValidationError{"conversation", msg}
+	case m.Rubric != "":
+		return &ValidationError{"rubric", msg}
+	case m.Judge != nil:
+		return &ValidationError{"judge", msg}
+	case m.Reference != nil && m.Reference.Answer != "":
+		return &ValidationError{"reference.answer", msg}
+	}
+	return nil
+}
+
+// rejectChatFields refuses a chat field in a coding task. A version 3
+// coding task carries exactly the version 2 fields.
+func rejectChatFields(m *manifest) error {
+	const msg = "belongs to the chat face"
+	switch {
+	case m.Conversation != "":
+		return &ValidationError{"conversation", msg}
+	case m.Rubric != "":
+		return &ValidationError{"rubric", msg}
+	case m.Judge != nil:
+		return &ValidationError{"judge", msg}
+	case m.Reference != nil && m.Reference.Answer != "":
+		return &ValidationError{"reference.answer", msg}
+	}
+	return nil
+}
+
+// rejectCodingFields refuses a coding field in a chat task. A chat task
+// names no repository, so a field that describes one is a task written for
+// the wrong face rather than a field that happens to be unused.
+func rejectCodingFields(m *manifest) error {
+	const msg = "belongs to the coding face"
+	switch {
+	case m.Repo != "":
+		return &ValidationError{"repo", msg}
+	case m.Rev != "":
+		return &ValidationError{"rev", msg}
+	case m.Files != nil:
+		return &ValidationError{"files", msg}
+	case m.Verify != (manifest{}).Verify:
+		return &ValidationError{"verify", msg}
+	case m.Mutants != nil:
+		return &ValidationError{"mutants", msg}
+	case m.Doctor != nil:
+		return &ValidationError{"doctor", msg}
+	case m.Reference != nil && m.Reference.Diff != "":
+		return &ValidationError{"reference.diff", msg}
+	}
+	return nil
 }
 
 // rejectV2Fields refuses a version 2 field in a version 1 file. The decoder
@@ -468,16 +743,39 @@ func cleanRepoPath(p string) (string, error) {
 	return clean, nil
 }
 
-// ContextBytes is what the task itself pours into the prompt: the
-// instruction and the full text of every file it lists. It is the number
+// ContextBytes is what the task itself pours into the prompt: on the coding
+// face the instruction and the full text of every file it lists, on the
+// chat face every message of the conversation. It is the number
 // max_context_bytes bounds, and the number a caller adds its own additions
-// to before deciding whether the prompt still fits.
+// to before deciding whether the prompt still fits. The reference answer
+// and the rubric are not in it: the judge sees them, the proposers do not.
 func (t *Task) ContextBytes() int {
+	if t.Chat != nil {
+		n := 0
+		for _, m := range t.Chat.Conversation {
+			n += len(m.Content)
+		}
+		return n
+	}
 	n := len(t.Instruction)
 	for _, f := range t.Files {
 		n += len(f.Content)
 	}
 	return n
+}
+
+// ConversationSHA256 is the hex digest of the chat task's conversation as
+// CMoA parsed it, for the trace. It is empty on the coding face.
+func (t *Task) ConversationSHA256() string {
+	if t.Chat == nil {
+		return ""
+	}
+	b, err := json.Marshal(t.Chat.Conversation)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // FilePaths lists the file paths in order.
@@ -489,7 +787,9 @@ func (t *Task) FilePaths() []string {
 	return out
 }
 
-// InstructionSHA256 is the hex digest of instruction.md, for the trace.
+// InstructionSHA256 is the hex digest of instruction.md, for the trace. It
+// is the digest of the empty string on the chat face, which has no
+// instruction.md.
 func (t *Task) InstructionSHA256() string {
 	sum := sha256.Sum256([]byte(t.Instruction))
 	return hex.EncodeToString(sum[:])

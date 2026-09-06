@@ -1,0 +1,10 @@
+{
+  "version": 3,
+  "id": "chat-hello",
+  "face": "chat",
+  "conversation": "conversation.json",
+  "reference": {"answer": "reference.md"},
+  "rubric": "rubric.md",
+  "judge": {"allow_tie": true},
+  "max_context_bytes": 65536
+}

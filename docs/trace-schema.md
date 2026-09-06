@@ -11,12 +11,20 @@ page is the contract for readers outside the module.
   prompt/<proposer-id>.json       the exact request sent
   candidates/<proposer-id>.json   what came back, with a status
   candidates/<proposer-id>.raw.txt
-  candidates/<proposer-id>.diff   only when status is ok
-  verify/<proposer-id>/result.json  written by select
+  candidates/<proposer-id>.diff   coding face, only when status is ok
+  candidates/<proposer-id>.txt    chat face, only when status is ok
+  verify/<proposer-id>/result.json  coding face, written by select
   verify/<proposer-id>/stdout.txt
   verify/<proposer-id>/stderr.txt
+  judge/<pair>-<ab|ba>.json       chat face, one judge call each
+  judge.json                      chat face, written once by select or judge
   select.json                     written once by select
 ```
+
+Which files a run holds follows from `run.json`'s `face`. The coding face
+writes diffs and `verify/`; the chat face writes answers, `judge/` and
+`judge.json`. Nothing else differs: the run id, the atomic writes and the
+write-once rule are the same on both.
 
 `run-id` is `YYYYMMDDTHHMMSSZ-<8 hex>` in UTC, so the lexicographically
 largest directory is the latest run. Every JSON file is written atomically.
@@ -28,7 +36,11 @@ largest directory is the latest run. Every JSON file is written atomically.
 | --- | --- |
 | `schema_version` | 1 |
 | `run_id`, `created_at`, `cmoa_version`, `prompt_version` | identity of the run and of the code and prompt templates that produced it |
-| `task` | `id`, `dir`, `repo`, `rev` (as written), `resolved_rev` (commit SHA), `files`, `instruction_sha256` |
+| `face` | `coding` or `chat`; a run written before the field existed has none, and is a coding run |
+| `task` | `id`, `dir`, `repo`, `rev` (as written), `resolved_rev` (commit SHA), `files`, `instruction_sha256`. On the chat face `repo`, `rev`, `resolved_rev` and `files` are empty: nothing is checked out |
+| `conversation_sha256` | chat face: the digest of the conversation as CMoA parsed it |
+| `candidates_origin` | chat face: `proposers`, or `external` when `cmoa judge` was handed the answers |
+| `external_candidates` | chat face, `external` only: `id`, `file` and `sha256` per answer, so a caller can pin what was judged |
 | `config` | the effective `cmoa.json` after defaults; holds `api_key_env` names, never key values |
 | `harness` | `vault`, `as_of` (valid time, YYYY-MM-DD), `at` (vault commit, `-dirty` suffix when the tree had changes), `docdag_version`, `binding` (id/title/status/path of each binding document), `render` (the rendered harness directory, absent when the run was given none) |
 | `proposers` | `id`, `model`, `base_url` per proposer, in configured order |
@@ -146,11 +158,15 @@ Without `--harness` the check is the one `task.json` already made.
 
 | field | meaning |
 | --- | --- |
-| `status` | `ok` (a diff was extracted), `http_error`, `timeout`, `malformed` (2xx but not a chat completion), `no_diff` (a completion with no unified diff in it) |
+| `status` | `ok` (a diff was extracted, or an answer arrived), `http_error`, `timeout`, `malformed` (2xx but not a chat completion), `no_diff` (coding face: a completion with no unified diff in it), `empty` (chat face: a completion with no text in it) |
+| `face`, `origin` | the run's face; `origin` is `external` for an answer `cmoa judge` was handed |
 | `error` | the error text for anything but `ok` |
-| `finish_reason`, `usage.prompt_tokens`, `usage.completion_tokens` | as the server reported |
+| `finish_reason`, `usage.prompt_tokens`, `usage.completion_tokens` | as the server reported. `usage.reasoning_tokens` comes from `completion_tokens_details` and is **part of** `completion_tokens`, not additional to it |
+| `reasoning_bytes` | how much of the completion was reasoning rather than answer: the server's `reasoning_content`, or the `<think>` block CMoA stripped out of the content. A proposer that spent its whole budget thinking is `empty` with `finish_reason: length` and a large `reasoning_bytes`, which is a different failure from one that answered nothing — and `completion_tokens` alone cannot tell them apart |
 | `timings.request_ms` | measured by CMoA; `server_prompt_ms`, `server_predicted_ms`, `tokens_per_second` come from llama-server's `timings` and are absent on other servers |
-| `diff` | `files`, `additions`, `deletions`, `sha256` of the `.diff` file; only when `status` is `ok` |
+| `diff` | coding face: `files`, `additions`, `deletions`, `sha256` of the `.diff` file; only when `status` is `ok` |
+| `answer_sha256`, `answer_bytes` | chat face: of the `.txt` file; only when `status` is `ok` |
+| `metadata` | chat face: `token_len` (the server's `completion_tokens`, or `-1`), `chars`, `header_count`, `list_count`, `bold_count`, `code_fence_count` |
 | `request_sha256`, `response_sha256` | digests of the exact HTTP bodies |
 | `started_at`, `finished_at` | UTC |
 
@@ -251,8 +267,309 @@ are verified one diff at a time, by the layer above.
 
 | field | meaning |
 | --- | --- |
-| `rule` | `first` |
-| `order` | candidate ids in the order they were considered (configured order) |
-| `selection.kind` | `selected` (`candidate_id`, `reason`), `no_candidate` (`tried`), `verifier_failed` (`error`), `judge_timeout` (`after_ms`, chat face only) |
-| `also_passed` | other candidates that passed; every candidate is verified even after the first pass, so the layer above can measure how often proposers agree |
-| `max_parallel`, `finished_at` | |
+| `rule` | `first` on the coding face, `judge-pairwise` on the chat face |
+| `order` | candidate ids in the order they were considered (configured order, or `c1..cN` for external candidates) |
+| `selection.kind` | `selected` (`candidate_id`, `reason`), `no_candidate` (`tried`, and on the chat face `reason`, the sub-reason below), `verifier_failed` (`error`), `judge_timeout` (`after_ms`), `judge_failed` (`error`, chat face) |
+| `also_passed` | coding face: other candidates that passed; every candidate is verified even after the first pass, so the layer above can measure how often proposers agree. Always `[]` on the chat face |
+| `ranked` | chat face: candidate ids by wins, ties broken by `order`. Informational — only `selection` decides |
+| `max_parallel`, `finished_at` | `max_parallel` is `verify.max_parallel` on the coding face and `judge.parallel` on the chat face |
+
+## the chat face
+
+A chat task (`task.json` version 3, `face: "chat"`) has no repository and
+no verifier. Its `conversation.json` is a JSON array of `{role, content}`
+with roles `system|user|assistant`, at least one message, non-empty content
+on each, and a `user` message last — that last message is what the
+proposers answer. `reference.answer` and `rubric` are Markdown files shown
+to the **judge only**; a proposer handed the reference answer is not
+answering the question. `judge.allow_tie` (default true) decides whether
+`tie` is in the judge's answer schema. An `instruction.md` in a chat task
+directory is ignored, with a log line.
+
+`max_context_bytes` bounds the conversation plus the rendered harness, the
+way it bounds the instruction and the files on the coding face.
+
+### candidates/<id>.txt
+
+The selected-from answer, reasoning blocks stripped and outer whitespace
+trimmed. `.raw.txt` still holds the completion exactly as it arrived. A
+candidate whose answer was only whitespace has status `empty` and writes no
+`.txt`.
+
+The `metadata` block is the style accounting a preference harness records
+for every answer. None of it reaches the judge's prompt. It is written at generation
+time because the question it answers — *was the judge buying length and
+decoration?* — cannot be answered later from numbers nobody wrote down.
+
+### the protocol
+
+Three candidates make three pairs; each pair is asked in both orders, so a
+selection is six calls. A pair is won only when **both orders name the same
+candidate**; a disagreement, or a `tie` in either order, is a draw and
+scores nothing for either side. A candidate that wins every pair it appears
+in is the Condorcet winner and is selected. Anything else is
+`no_candidate`, with a sub-reason:
+
+| sub-reason | when |
+| --- | --- |
+| `cycle` | every pair was decided and the wins run in a circle |
+| `no_majority` | some pair was decided, but nobody beat everybody |
+| `all_draws` | no pair was decided at all (two or more pairs) |
+| `invalid_output` | the judge never returned usable JSON for a call the outcome needed, retry included |
+| `too_few_candidates` | fewer than two answers to compare |
+
+**`all_draws` is a union**, and a deliberately coarse one: a judge that
+abstained on every pair, a judge that contradicted itself under swap on
+every pair, and a judge that was never reached all land in it. Those are
+three different findings about the judge, and reporting them under one word
+is precisely the conflation an agreement metric must not make — so the
+split lives one level down, in `pairs[].draw_reason`:
+
+| `draw_reason` | when |
+| --- | --- |
+| `tie` | both orders answered and at least one called it a tie |
+| `disagree` | both orders named a candidate, and not the same one — the position spoke, not the quality |
+| `invalid` | an order never produced usable JSON, retry included |
+| `unmeasured` | an order timed out or could not be sent; the pair was never judged at all |
+
+A decided pair carries no `draw_reason`. `judge.json`'s `draw_reasons`
+counts the draws by that field, so the values sum to the number of draws
+and a calibration can report each treatment by name rather than folding
+them together.
+
+There is no re-ask beyond one retry for malformed JSON, and no
+deterministic fallback. "Take the first" or "take the shorter" would
+reinstate as a rule exactly the position and length biases the order swap
+exists to detect.
+
+A pair that was never answered — a timeout, or an endpoint that could not
+be reached — does **not** discard a winner it could not have unseated. If
+one candidate has already beaten every other, no answer to the pair between
+two losers can change that, and the outcome is `selected` with the failed
+pair recorded as `draw_reason: unmeasured`. The outcome becomes
+`judge_timeout` or `judge_failed` only when the missing answers could still
+decide it: when some candidate could still win every pair it appears in if
+each unanswered pair went its way. A timeout outranks a transport error,
+because a timeout is the one a caller retries.
+
+The candidates are called `A` and `B` inside a call; which candidate is
+which is only in the trace.
+
+### the presentation seed and the nonce
+
+There is **no presentation permutation**. Both orders of every pair are
+always asked, so shuffling the candidates would only renumber the pairs and
+swap which order is filed as `-ab`; it cannot change one byte the judge
+reads. The pairs are enumerated in the caller's own order.
+
+What a re-run can vary is the **nonce**, and it is derived from a seed
+rather than drawn from `crypto/rand`:
+
+```json
+"presentation": {"seed": 7, "seed_source": "flag", "nonce": "7f3a91c4"}
+```
+
+`seed_source` is `flag` when `--seed` was given and `run_id` otherwise, in
+which case the seed is derived from the run id (which is itself 8 hex from
+`crypto/rand`). The nonce is 8 hex from a PRNG seeded with that value.
+
+This makes `--seed` a real metamorphic perturbation: the same question in
+different irrelevant bytes, whose answer ought not to change. A judge whose
+verdict moves when only the fence label moved is reading the fence. It also
+makes a selection reproducible from its own trace, which a `crypto/rand`
+nonce could not be. The nonce is not a secret — it is recorded in
+`judge.json` — and its fencing job only needs freshness per selection, not
+unpredictability.
+
+`--judge-seed` is a different knob and moves the judge's own sampling seed;
+`--seed` never touches it.
+
+### judge.json
+
+```json
+{
+  "schema_version": 1,
+  "run_id": "20260905T120000Z-abcdef01",
+  "judge": {"model": "…", "base_url": "…", "temperature": 0, "seed": null, "max_tokens": 512,
+            "output_format": "json_schema", "parallel": 3, "allow_tie": true, "prompt_version": "…",
+            "extra_body": {"chat_template_kwargs": {"reasoning_effort": "low"}}},
+  "candidates": ["p1", "p2", "p3"],
+  "presentation": {"seed": 7, "seed_source": "flag", "nonce": "7f3a91c4"},
+  "pairs": [
+    {"pair": ["p1", "p2"],
+     "orders": [
+       {"first": "p1", "second": "p2", "choice": "A", "choice_candidate": "p1", "status": "ok",
+        "retries": 0, "latency_ms": 3200, "request_sha256": "…", "response_sha256": "…",
+        "file": "judge/0-ab.json"},
+       {"first": "p2", "second": "p1", "choice": "B", "choice_candidate": "p1", "status": "ok",
+        "retries": 1, "latency_ms": 3400, "request_sha256": "…", "response_sha256": "…",
+        "file": "judge/0-ba.json"}
+     ],
+     "verdict": "p1"
+    },
+    {"pair": ["p2", "p3"], "orders": [ … ], "verdict": "draw", "draw_reason": "tie"}
+  ],
+  "wins": {"p1": 2, "p2": 0, "p3": 1},
+  "outcome": {"kind": "selected", "candidate_id": "p1", "reason": "condorcet winner, 2 of 3 pairs agreed under both orders"},
+  "ranked": ["p1", "p3", "p2"],
+  "draw_reasons": {"tie": 1},
+  "swap_consistent_pairs": 3,
+  "invalid_output_retries": 1,
+  "sanitized": [{"candidate": "p2", "what": "closing-tag-like sequence escaped", "count": 1}],
+  "injection_flags": {"p1": [], "p2": ["ignore previous instructions"], "p3": []},
+  "usage": {"prompt_tokens": 4800, "completion_tokens": 210},
+  "latency_ms": 41230,
+  "finished_at": "…"
+}
+```
+
+An order's `latency_ms` is the wall clock of its call, both attempts
+included when the first did not parse; each attempt's own share is in the
+call file.
+
+`verdict` is a candidate id or `draw`, and a draw carries a `draw_reason`.
+An order's `status` is `ok`, `invalid_output` (still unparsable after the
+one retry), `timeout` or `error` (HTTP or decode failure). A `timeout` or
+an `error` escalates the whole outcome to `judge_timeout` or `judge_failed`
+**only if the pair it broke could still have decided the selection** (see
+above); either way it says nothing about any candidate, because the
+question was never put.
+
+`swap_consistent_pairs` counts pairs whose two orders named the **same
+candidate** — including two ties. Choosing `A` in both orders is not
+agreement; it is the position speaking.
+
+`sanitized` is what the fencing rewrote before the judge saw it. A rewrite
+changes what is judged, so a silent one would make an outcome
+unexplainable — and a trace that claims a defence it did not apply is worse
+than one that claims nothing. Three rewrites exist, applied in this order:
+
+1. `control characters dropped` — the C0 characters other than tab and
+   newline, and DEL;
+2. `zero-width characters dropped` — U+200B, U+200C, U+200D, U+2060, U+FEFF;
+3. `closing-tag-like sequence escaped` — anything matching
+   `<\s*/\s*candidate`, case-insensitively, has its opening angle bracket
+   escaped (`</candidate` becomes `<\/candidate`).
+
+The invisible characters go **first** on purpose. Escaping first let
+`</\rcandidate` and `</candi<U+200B>date` slip past the pattern and then be
+reassembled into a working closing tag by the very pass that was supposed
+to clean up after it.
+
+`injection_flags` lists the injection-shaped phrases a candidate's answer
+held. They are **recorded and never acted on**: silently discarding a
+flagged candidate would be a second, unmeasured judge, and the flag's value
+is that a calibration can ask whether flagged candidates win more often
+than they should.
+
+### judge/<pair>-<ab|ba>.json
+
+One call, in full: the pair and its order, the model and base URL, and one
+`attempts` entry per HTTP round trip. Each attempt holds the exact messages
+sent, the exact request body (no `Authorization`), the exact response body,
+the completion text with reasoning stripped, and either the parsed object
+or the parse error. A second attempt exists only when the first did not
+parse; it appends exactly one message, `Return only the JSON object.`
+
+The candidate blocks in the prompt are fenced with a per-selection nonce:
+
+```
+<candidate id="A" n="7f3a91c4">
+…
+</candidate:7f3a91c4>
+```
+
+### how the judge is asked
+
+`judge.output_format` is `json_schema` (the default) or `none`. With
+`json_schema` CMoA sends an OpenAI `response_format` naming an object with
+`reason` (a string of at most 400 characters) then `choice` (the enum
+`A`, `B`, and `tie` when the task allows one). **The properties are listed
+in that order on the wire**, because a server emits them in schema order:
+the reason is written before the choice, so the choice cannot be reached
+without passing through it. A pinned test asserts the ordering of the
+encoded request, since a Go map would have sorted `choice` first.
+
+CMoA never sends a raw GBNF `grammar`. A server with its own structured
+chat format parses a raw grammar beside that format rather than composing
+the two, and answers an error; `judge.extra_body` refuses both `grammar`
+and `response_format` for that reason.
+
+Parsing takes the **last** balanced `{…}` in the completion, ignoring
+braces inside JSON strings, and decodes it with unknown fields refused. A
+model that reasons in prose before answering leaves earlier braces behind,
+and the answer is the one it finished with. **Both keys are required**: an
+object carrying only a `choice` is the format bypassing the reasoning the
+key order exists to force, and it is `invalid_output`. `allow_tie` comes
+from the task and from nowhere else — never from the rendered prompt, which
+holds the candidate text.
+
+### cmoa judge
+
+`cmoa judge --task <chat task> --candidate <file> …` builds a run from
+answers produced somewhere else and performs the same protocol with no
+proposer call. The candidates are `c1..cN` in the order the flags were
+given; `run.json` records `candidates_origin: "external"` and each file's
+digest. `--seed` changes the nonce and nothing else, never the judge's
+sampling seed — `--judge-seed` does that.
+
+Both `select` and `judge` refuse a run that already has `judge.json` or
+`select.json` **before** making a call, so an interrupted attempt cannot be
+made to spend the fleet a second time and then fail at the write. Call
+files an abandoned attempt left behind, with no `judge.json` beside them,
+are cleared with a line saying so.
+
+On the chat face both `cmoa select` and `cmoa judge` print one JSON object
+on stdout:
+
+```json
+{"kind":"selected","candidate_id":"c1","reason":"condorcet winner, 2 of 3 pairs agreed under both orders",
+ "answer":"…/candidates/c1.txt","ranked":["c1","c3","c2"],"run":"…","judge":"…/judge.json"}
+```
+
+`cmoa judge` prints the run directory on a second line. Both exit 0
+whatever the outcome.
+
+### cmoa serve
+
+`cmoa serve` answers `GET /v1/models` and `POST /v1/chat/completions`.
+Every request writes a task directory under `serve.runs_dir` holding a
+generated `task.json` and `conversation.json`, and then a full run trace
+inside it, so an answer served over HTTP is as reconstructible as one
+produced by the CLI. The task id is the run id lower-cased, so the task,
+the run and the completion id all name the same request.
+
+A 200 carries the usual chat completion plus a `cmoa` extension field:
+
+```json
+"cmoa": {"run_id": "…", "selection": {"kind": "selected", "reason": "…"},
+         "judge": {"calls": 6, "swap_consistent_pairs": 3, "invalid_output_retries": 0, "latency_ms": 41230},
+         "candidates": {"asked": 3, "ok": 3}, "harness": {"tree_sha256": "…"}}
+```
+
+`usage` sums the proposers and the judge. The id of the proposer whose
+answer won is **not** in the response — it is in the trace. A client that
+could see it could learn to ask for it, and the pool is the router's
+decision.
+
+A selection that did not happen is an error, not a 200 with an apology:
+
+| status | `error.type` | when |
+| --- | --- | --- |
+| 400 | `invalid_request_error` | the body did not parse, the messages did not validate, or the conversation is over `max_context_bytes` |
+| 404 | `invalid_request_error` | `model` is not `serve.pool_name` |
+| 502 | `no_candidate` | `error.code` is the sub-reason, `error.param` the run id |
+| 502 | `judge_failed` | the judge could not be asked |
+| 504 | `judge_timeout` | the judge did not answer in time |
+
+`stream: true` returns `text/event-stream` with one
+`chat.completion.chunk` carrying the whole content and then `data: [DONE]`.
+The answer is chosen before a single token can be sent — the judge cannot
+compare answers that do not exist yet — so this is the wire format, not
+streaming.
+
+`serve.max_inflight` (default 1) bounds selections in flight: a second
+judge call halves the accelerator the first is using, and every latency in
+the trace would become a measurement of contention. The server binds
+loopback, has no auth and no TLS; a non-loopback `serve.listen` needs
+`--allow-remote` on the command line, where a person types it.
