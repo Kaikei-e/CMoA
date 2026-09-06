@@ -278,7 +278,7 @@ docdag lint                                     # the rules in docdag.yaml
 
 ```sh
 go install github.com/Kaikei-e/CMoA/cmd/cmoa@latest
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.3.0   # propose reads the vault through it
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.4.1   # propose reads the vault through it
 ```
 
 CMoA needs Go 1.27 and git at runtime, and Docker Compose for the coding
@@ -288,8 +288,8 @@ face (`select` runs `docker compose run`); the chat face runs no container.
 `examples/task-chat-hello` against a live fleet.
 
 `docdag.yaml` pins the
-`adr` preset and the corpus directory; CI downloads the v0.3.0 release
-binary via `Kaikei-e/DocDag@v0.3.0`. Locally, `pre-commit install` runs the
+`adr` preset and the corpus directory; CI downloads the v0.4.1 release
+binary via `Kaikei-e/DocDag@v0.4.1`. Locally, `pre-commit install` runs the
 same checks on Markdown and `docdag.yaml` edits; the hook builds `docdag`
 from source and needs a Go toolchain.
 
