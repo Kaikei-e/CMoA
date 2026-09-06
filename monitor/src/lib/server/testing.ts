@@ -68,17 +68,25 @@ export function judgeSample(overrides: Partial<FleetSample> = {}): FleetSample {
 	});
 }
 
-/** A `fetch` stand-in that answers from a table of URL to status and body. */
+/**
+ * A `fetch` stand-in that answers from a table of URL to status and body.
+ * `calls` is the URL order; `requests` also keeps what was sent, for a route
+ * that has to prove what it forwarded. A route may instead be a function, for a
+ * stub that has to fail rather than answer.
+ */
 export function stubFetch(
-	routes: Record<string, { status: number; body: string }>
-): { fetch: typeof fetch; calls: string[] } {
+	routes: Record<string, { status: number; body: string } | (() => never)>
+): { fetch: typeof fetch; calls: string[]; requests: { url: string; init?: RequestInit }[] } {
 	const calls: string[] = [];
-	const impl = (async (input: RequestInfo | URL) => {
+	const requests: { url: string; init?: RequestInit }[] = [];
+	const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		calls.push(url);
+		requests.push({ url, init });
 		const route = routes[url];
 		if (!route) return new Response('not found', { status: 404 });
+		if (typeof route === 'function') return route();
 		return new Response(route.body, { status: route.status });
 	}) as typeof fetch;
-	return { fetch: impl, calls };
+	return { fetch: impl, calls, requests };
 }

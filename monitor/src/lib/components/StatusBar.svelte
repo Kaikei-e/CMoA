@@ -14,7 +14,20 @@
 		['R', 'runs'],
 		['I', 'inspect'],
 		['F', 'follow'],
+		['C', 'comm'],
 		['Esc', 'close']
+	];
+
+	/**
+	 * The key to the four state colours, one word each. Colour on this screen is
+	 * redundant with the state word, and this is what makes that promise
+	 * checkable — the word alone is always enough to read the screen.
+	 */
+	const LEGEND: [string, string][] = [
+		['c-ok', 'ok'],
+		['c-run', 'run'],
+		['c-bad', 'bad'],
+		['c-dim', 'dim']
 	];
 
 	const sampled = $derived(
@@ -34,6 +47,15 @@
 		else is marked aria-hidden or is simply not announced.
 	-->
 	<p class="announce t-2" aria-live="polite" aria-atomic="true">{announcement}</p>
+
+	<ul class="legend" aria-label="state colours">
+		{#each LEGEND as [cls, word] (word)}
+			<li>
+				<span class="lamp {cls}" aria-hidden="true"></span>
+				<span class="word {cls}">{word}</span>
+			</li>
+		{/each}
+	</ul>
 
 	<div class="readouts">
 		<button
@@ -91,6 +113,23 @@
 		white-space: nowrap;
 	}
 
+	.legend {
+		display: flex;
+		align-items: center;
+		gap: var(--sp);
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		flex: none;
+		font-size: 10px;
+	}
+
+	.legend li {
+		display: flex;
+		align-items: center;
+		gap: var(--sp-half);
+	}
+
 	.readouts {
 		display: flex;
 		align-items: baseline;
@@ -123,6 +162,12 @@
 		.announce {
 			order: 3;
 			flex-basis: 100%;
+		}
+	}
+
+	@media (max-width: 700px) {
+		.legend {
+			display: none;
 		}
 	}
 </style>

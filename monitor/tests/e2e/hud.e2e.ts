@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { FLEET_PORTS } from './fake-fleet';
+import { CANNED_RUN_NO_CANDIDATE, CANNED_RUN_OK, FLEET_PORTS } from './fake-fleet';
 
 const CHAT_SELECTED = '20260101T000000Z-11111111';
 const CHAT_NO_CANDIDATE = '20260101T001000Z-22222222';
@@ -127,4 +127,61 @@ test('the calibration tile names the judge and its verdict', async ({ page }) =>
 	await expect(tile).toContainText('uncalibrated');
 	await expect(tile).toContainText('0.281');
 	await expect(tile).toContainText(/IN FORCE THROUGH|EXPIRED/);
+});
+
+test('a message is relayed to cmoa serve and the answer names its run', async ({ page }) => {
+	await open(page);
+
+	await page.getByTestId('comm-input').fill('say ok please');
+	await page.getByTestId('comm-input').press('Enter');
+
+	await expect(page.getByTestId('comm-user')).toHaveText('> say ok please');
+	await expect(page.getByTestId('comm-assistant')).toContainText('The pool answers');
+	const meta = page.getByTestId('comm-meta');
+	await expect(meta).toContainText(`run ${CANNED_RUN_OK}`);
+	await expect(meta).toContainText('selected');
+	await expect(meta).toContainText('2/3 swap-consistent');
+	await expect(meta).toContainText('23.2s');
+	await expect(page.getByTestId('comm-fault')).toHaveCount(0);
+
+	// The answer's run is pinned, so the round it came from stays on screen.
+	await expect(page).toHaveURL(new RegExp(`\\?run=${CANNED_RUN_OK}$`));
+});
+
+test('a round that selected nobody shows the fault and no answer', async ({ page }) => {
+	await open(page);
+
+	await page.getByTestId('comm-input').fill('a draw, please');
+	await page.getByTestId('comm-input').press('Enter');
+
+	const fault = page.getByTestId('comm-fault');
+	await expect(fault).toContainText('NO CANDIDATE (all_draws)');
+	await expect(fault).toContainText(`run ${CANNED_RUN_NO_CANDIDATE}`);
+	await expect(page.getByTestId('comm-assistant')).toHaveCount(0);
+	// The refused turn stays on screen so it can be edited and sent again.
+	await expect(page.getByTestId('comm-user')).toHaveText('> a draw, please');
+});
+
+test('the send button is dead while cmoa serve is down', async ({ page, request }) => {
+	await open(page);
+
+	await request.post(`${CONTROL}/stop/${FLEET_PORTS.serve}`);
+	try {
+		await expect(page.getByTestId('comm-offline')).toContainText('SERVE OFFLINE', {
+			timeout: 5000
+		});
+		await page.getByTestId('comm-input').fill('anyone there');
+		await expect(page.getByTestId('comm-send')).toBeDisabled();
+	} finally {
+		await request.post(`${CONTROL}/start/${FLEET_PORTS.serve}`);
+	}
+	await expect(page.getByTestId('comm-offline')).toHaveCount(0, { timeout: 5000 });
+	await expect(page.getByTestId('comm-send')).toBeEnabled();
+});
+
+test('the fleet band carries no radar sweep', async ({ page }) => {
+	await open(page);
+
+	await expect(page.locator('.radar')).toHaveCount(0);
+	await expect(page.getByRole('heading', { name: 'Fleet' }).locator('..')).not.toContainText('SCAN');
 });

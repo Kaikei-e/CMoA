@@ -107,22 +107,13 @@
 				<div class="cell__host t-3">GET /v1/models</div>
 			</div>
 		{/if}
-
-		<div class="sweep" aria-hidden="true">
-			<div class="radar">
-				{#if motion}<div class="radar__sweep"></div>{:else}<div
-						class="radar__sweep radar__sweep--parked"
-					></div>{/if}
-			</div>
-			<span class="t-3">SCAN</span>
-		</div>
 	</div>
 </Panel>
 
 <style>
 	/*
-	 * Flex, not `repeat(auto-fit, …)`: an intrinsic track for the radar cannot sit
-	 * beside an auto-fit repeat, and the whole declaration would be dropped.
+	 * Flex, not `repeat(auto-fit, …)`: the cells share the row evenly at any count
+	 * and wrap without a track template that has to be kept in step with the fleet.
 	 */
 	.band {
 		display: flex;
@@ -198,29 +189,9 @@
 		font-size: 11px;
 	}
 
-	.sweep {
-		flex: none;
-		display: grid;
-		justify-items: center;
-		align-content: center;
-		gap: 2px;
-		padding: var(--sp-half) var(--sp-2);
-		background: var(--c-bg-2);
-		font-size: 10px;
-		letter-spacing: 0.14em;
-	}
-
-	.radar__sweep--parked {
-		animation: none;
-		--sweep-angle: 315deg;
-	}
-
 	@media (max-width: 900px) {
 		.cell {
 			flex-basis: 150px;
-		}
-		.sweep {
-			display: none;
 		}
 	}
 </style>

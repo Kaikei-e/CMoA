@@ -5,6 +5,9 @@ import type { MonitorConfig, ProposerConfig } from '$lib/types';
 /** The default polling period, in milliseconds. */
 export const DEFAULT_INTERVAL_MS = 500;
 
+/** `serve.pool_name` when the config leaves it out, as CMoA defaults it. */
+export const DEFAULT_POOL_NAME = 'cmoa';
+
 export class ConfigError extends Error {}
 
 /**
@@ -69,7 +72,9 @@ export function loadConfig(path: string): MonitorConfig {
 		config.serve = {
 			listen: asString(serve.listen),
 			// runs_dir is relative to the config file, exactly as CMoA resolves it.
-			runsDir: runsDir ? resolve(dirname(abs), runsDir) : ''
+			runsDir: runsDir ? resolve(dirname(abs), runsDir) : '',
+			// The same default CMoA's own config package applies.
+			poolName: asString(serve.pool_name) || DEFAULT_POOL_NAME
 		};
 	}
 
