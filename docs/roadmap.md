@@ -13,7 +13,7 @@ are not.
 | 4 | **CMoA** | **v0, coding face: `propose` and `select`, verifier-selected, no judge** | shipped (this repository) |
 | 5 | uzushio | `run` and `improve`: held-in and held-out splits, sequential testing, edits accepted only when both pass. CMoA contributes `propose --harness`, `--seed` and `--temperature` ([ADR 0010](adr/0010-harness-directory.md)) | shipped ([uzushio#6](https://github.com/Kaikei-e/uzushio/pull/6), 2026-09-05) |
 | 6 | uzushio | the first task manifest carries the constraints learned from the previous project: one milestone per session, a ceiling on test lines per product line, dogfooding kept off the critical path | shipped ([uzushio#6](https://github.com/Kaikei-e/uzushio/pull/6), clauses UZ-C-006 to UZ-C-008, 2026-09-05) |
-| 7 | CMoA | chat face: a single blind judge of a different model family, position-swapped pairwise presentation with a seeded nonce, `cmoa judge` and `cmoa serve` ([ADR 0011](adr/0011-chat-face-blind-pairwise-judge-and-serve.md)); uzushio's calibration log (three kappas with named tie handling, expiring `calibration` documents) | shipped ([CMoA#7](https://github.com/Kaikei-e/CMoA/pull/7), [uzushio#7](https://github.com/Kaikei-e/uzushio/pull/7), 2026-09-06; first calibration verdict: uncalibrated) |
+| 7 | CMoA | chat face: a single blind judge of a different model family, position-swapped pairwise presentation with a seeded nonce, `cmoa judge` and `cmoa serve` ([ADR 0011](adr/0011-chat-face-blind-pairwise-judge-and-serve.md)), then consensus among the candidates before the judge and a Copeland score with a recorded tie-break after it ([ADR 0013](adr/0013-consensus-then-copeland-for-chat-selection.md)); uzushio's calibration log (three kappas with named tie handling, expiring `calibration` documents) | shipped ([CMoA#7](https://github.com/Kaikei-e/CMoA/pull/7), [uzushio#7](https://github.com/Kaikei-e/uzushio/pull/7), 2026-09-06; first calibration verdict: uncalibrated, to be re-run against the new selector) |
 
 ## Tooling
 
@@ -32,21 +32,26 @@ verifier of its own:
 ## What v1 does not do
 
 - **The judge never writes an answer.** It compares candidates and picks
-  one, or picks none. Nothing is merged, rewritten or completed, so an
-  answer that reaches a caller is an answer a proposer wrote.
+  one, or picks none — and where the candidates already agree with each
+  other it is not asked at all. Nothing is merged, rewritten or completed,
+  so an answer that reaches a caller is an answer a proposer wrote.
 - **No panel of judges.** One judge, measured by calibration. Nine
   frontier judges are worth about two effective votes on correlated
   errors, and the panel's accuracy sits well below what independent votes
   would give — so a panel buys far less than it costs, and hides the one
   thing that can be measured.
-- **No deterministic fallback.** When the pairwise protocol does not
-  produce a Condorcet winner the outcome is `no_candidate` with a
-  sub-reason, not "the first" or "the shorter". A fallback rule would
-  reinstate as a design decision exactly the position and length biases
-  the order swap exists to detect.
+- **No fallback that reads position.** A tie at the top of the score is
+  broken by a deterministic, recorded chain — agreement with the rest of
+  the run, then the shorter answer where the gap is real, then a hash of
+  the answer's own text — and never by "the first", the listed order or
+  the proposer that wrote it. Those are the biases the order swap exists
+  to detect, and they are strongest exactly where a tie-break fires. What
+  the chain decided is in `judge.json`'s `tie_break`, so no selection is
+  settled by a rule a reader cannot see.
 - **No re-asking.** One retry for JSON that did not parse, and nothing
-  else. Repeated asking of a judge that is unsure makes a coin flip look
-  like a decision.
+  else. The judge is never asked again with `tie` removed, and a tie is
+  never resolved by another call. Repeated asking of a judge that is
+  unsure makes a coin flip look like a decision.
 - No pool selection by measured error correlation. The pool is the
   configured list, in configured order; the correlation matrix is a
   uzushio measurement that a later CMoA version will read.

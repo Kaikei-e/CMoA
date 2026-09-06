@@ -115,30 +115,51 @@ answering the question. `cmoa.json` version 2 adds a `judge` block naming
 the judge endpoint, and a `serve` block; version 1 files keep their meaning
 and mean "no judge, no serve". See `examples/task-chat-hello`.
 
-Selection on the chat face is **round-robin pairwise with an order swap**.
-Three answers make three pairs, each asked in both orders: six calls. A pair
-is won only when both orders name the same candidate; a disagreement, or a
-`tie` in either order, is a draw and scores nothing for either side. A
-candidate that wins every pair it appears in is the Condorcet winner and is
-selected.
+Selection on the chat face is **consensus first, then a Copeland score**.
 
-Anything else is `no_candidate`, with a sub-reason — `cycle`,
-`no_majority`, `all_draws`, `invalid_output` or `too_few_candidates`. There
-is no re-ask beyond one retry for malformed JSON, and **no deterministic
-fallback**: "take the first" or "take the shorter" would reinstate as a rule
-exactly the position and length biases the order swap exists to detect.
-`no_candidate` is an outcome CMoA already has a word for, and the layer
-above decides whether to send the question to a person or drop it. The
-distribution of the sub-reasons over a calibration set is itself a measure
-of the judge.
+The candidates are compared with each other before the judge is asked at
+all. Each answer is normalised — full-width forms folded to ASCII, lower
+case, markdown emphasis and list markers stripped, whitespace collapsed,
+trailing punctuation trimmed — and two answers agree when the normalised
+texts are equal, or when both are short, both hold a number, and their last
+numbers match once thousands separators are gone. If a strict majority
+agree, one of them is returned and **no judge call is made**. Three
+proposers answering `101` to `1 + 100` is not a failure to decide; it is
+the strongest evidence the round has.
 
-`all_draws` is a coarse union — a judge that abstained, one that
-contradicted itself under swap, and one that was never reached all land in
-it — so every pair also records **why** it drew: `tie`, `disagree`,
-`invalid` or `unmeasured`, counted in `judge.json` as `draw_reasons`. Three
-different findings about a judge reported under one word is the conflation
-an agreement metric must not make, so the split is kept where a calibration
-can read it.
+When they disagree, the judge runs **round-robin pairwise with an order
+swap**: three pairs, each asked in both orders, six calls. A pair is won
+only when both orders name the same candidate; a disagreement, or a `tie`
+in either order, is a draw — and a draw now **counts**. A win scores 1, a
+draw the judge answered scores 0.5 to each side, a loss 0. That is the swap
+protocol's own reading of an inconsistent pair, and the way an arena folds
+a tie into a Bradley-Terry fit. A Condorcet winner is still reported as
+one; otherwise the highest score is selected.
+
+A draw nobody could measure — an unparsable answer, a timeout, a call that
+could not be sent — scores nothing, because a machine failure is not a
+judgment. Those still escalate: `invalid_output` is `no_candidate`, and an
+unanswered pair that could still have decided is `judge_timeout` or
+`judge_failed`. So `no_candidate` is the residual case only —
+`too_few_candidates` and `invalid_output`. `cycle`, `no_majority` and
+`all_draws` stay in the vocabulary because older traces carry them, and are
+no longer produced.
+
+What the score cannot part is settled by three keys in order, and the key
+that fired is recorded in `judge.json` as `tie_break`: agreement with the
+rest of the run, then the shorter normalised answer *only* where the
+longest is at least 1.5× the shortest, then the lowest SHA-256 of the
+normalised text. **No key reads the presentation position, the listed order
+or the proposer.** Those are the biases the swap exists to detect, and they
+are strongest exactly in the tie region. The hash is arbitrary, but it is
+arbitrary about the answer: the same answers give the same winner in every
+run, on every machine.
+
+Every pair still records **why** it drew — `tie`, `disagree`, `invalid` or
+`unmeasured`, counted in `judge.json` as `draw_reasons` — and that word now
+decides whether the draw scored at all. Three different findings about a
+judge reported under one word is the conflation an agreement metric must
+not make, so the split is kept where a calibration can read it.
 
 A pair nobody could answer does not throw away a winner it could not have
 unseated: if one candidate has already beaten every other, a timeout in the
@@ -180,12 +201,15 @@ cannot be made to spend the fleet twice.
 `cmoa serve` answers `GET /v1/models` and `POST /v1/chat/completions`. Every
 request becomes a task directory and a full run trace under `serve.runs_dir`,
 so an answer served over HTTP is as reconstructible as one produced by the
-CLI. A 200 carries a `cmoa` extension field with the run id, the selection,
-the judge's call count and swap consistency, and the harness digest — but
-not the id of the proposer whose answer won, which stays in the trace. A
+CLI. A 200 carries a `cmoa` extension field with the run id, the selection
+and its Copeland score, the consensus and tie-break that settled it, the
+judge's call count and swap consistency, and the harness digest — all as
+counts and keys, never as candidate ids, so the id of the proposer whose
+answer won stays in the trace. A consensus answers with `calls: 0`. A
 selection that did not happen is an error, not a 200 with an apology:
 `no_candidate` is 502 with the sub-reason as `error.code`, a judge that
-could not be asked is 502, and one that ran out of time is 504. `stream:
+could not be asked is 502, and one that ran out of time is 504. A tied
+ranking is no longer one of these. `stream:
 true` returns the wire format as a single chunk; the judge cannot compare
 answers that do not exist yet, so there is nothing to stream. The server
 binds loopback and has no auth, so a non-loopback address needs
@@ -199,9 +223,10 @@ below it.
 1. **A deterministic router and proposer pool.** Which proposers run is
    decided by configuration, never by asking a model.
 2. **Selection-type aggregation.** On the coding face a candidate is
-   selected by passing the verifier; on the chat face by a single judge,
-   pairwise and in both orders. Candidates are never merged into one
-   answer, and the judge never writes an answer of its own.
+   selected by passing the verifier; on the chat face by agreement among
+   the candidates, and where they disagree by a single judge, pairwise and
+   in both orders. Candidates are never merged into one answer, and the
+   judge never writes an answer of its own.
 3. **Traces as files.** Every run writes its candidates, the reason for the
    selection, the models and resources used, and the `as_of` day and `at`
    revision of the specification it read, so the run can be reconstructed
