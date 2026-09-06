@@ -85,7 +85,7 @@ whichever run is newest and switches when a newer one appears.
 | `FLEET` | one cell per proposer plus `JUDGE` and `SERVE`: reach lamp, model, state word, decoded tokens, tokens/second, prefill progress. Always live, run or no run |
 | `ROUND` | run id, face, elapsed, phase, the run directory, and the `FOLLOW` / `PINNED` chip |
 | `PROPOSE` | one row per proposer: state, a segmented budget bar, decoded tokens, rate; underneath, the candidate status, the answer excerpt or `N file(s) +a/-d`, timing, and `verify <status>` (coding) or reasoning bytes (chat) |
-| `JUDGE` | chat only: the judge server, the presentation seed and nonce, the pair x ab/ba grid with its verdict column, wins, swap-consistency, retries and outcome. A verdict inferred from the call files before `judge.json` lands is tagged `PROV` |
+| `JUDGE` | chat only: the judge server, the presentation seed and nonce, the pair x ab/ba grid with its verdict column, wins, swap-consistency, retries and outcome. A verdict inferred from the call files before `judge.json` lands is tagged `PROV`. A round the candidates settled among themselves never asked the judge, so `judge.json` holds no pairs and the grid is empty -- the outcome line carries the whole story |
 | `SELECT` | the selection sentence, the ranking, and anything else that passed |
 | `TIMELINE` | a time axis with a marker per phase, and the same offsets as text |
 | `CALIBRATION` | per judge: verdict, human / swap / rerun kappa, tie handling, and whether it is still in force |

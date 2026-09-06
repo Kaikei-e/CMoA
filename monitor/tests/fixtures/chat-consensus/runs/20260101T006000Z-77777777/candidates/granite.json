@@ -1,0 +1,31 @@
+{
+  "proposer_id": "granite",
+  "model": "granite-4.2-8b",
+  "face": "chat",
+  "status": "ok",
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 118,
+    "completion_tokens": 12
+  },
+  "timings": {
+    "request_ms": 5000,
+    "server_prompt_ms": 400.0,
+    "server_predicted_ms": 4600.0,
+    "tokens_per_second": 21.4
+  },
+  "answer_sha256": "2d0e97a9280cb48c35910054441079f3ea68c3f251386b1fb3f18fe7332bdca7",
+  "answer_bytes": 7,
+  "metadata": {
+    "token_len": 12,
+    "chars": 6,
+    "header_count": 0,
+    "list_count": 0,
+    "bold_count": 0,
+    "code_fence_count": 0
+  },
+  "request_sha256": "93f2ae1ad569802f153f997e4b39b3f3dc2f0f8afb8044ebfa2d63812d034210",
+  "response_sha256": "4e387628c9101ce57fc5ab3c09fe0cb5e25bceb93c4266badfd86aa4b8caeda1",
+  "started_at": "2026-01-01T00:06:00.002000000Z",
+  "finished_at": "2026-01-01T00:06:05.000000000Z"
+}

@@ -334,9 +334,13 @@ function deriveJudge(
 	const judging = !!judge || callsSeen || (allProposed && !select);
 
 	const recorded = judge?.pairs ?? [];
+	// judge.json with no pairs is a round the candidates settled among
+	// themselves: the judge was never asked, so there is no grid to draw.
+	// Without this the finished round would show three cells running for ever.
+	const askedTheJudge = !judge || recorded.length > 0;
 	const pairs: JudgePair[] = [];
 	let index = 0;
-	for (let i = 0; i < candidates.length; i++) {
+	for (let i = 0; askedTheJudge && i < candidates.length; i++) {
 		for (let k = i + 1; k < candidates.length; k++) {
 			const pairRecorded = index < recorded.length ? recorded[index] : null;
 			const a = pairRecorded?.pair?.[0] ?? candidates[i];

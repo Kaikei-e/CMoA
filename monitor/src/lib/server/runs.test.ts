@@ -151,7 +151,7 @@ describe('summariseRun', () => {
 	it('names the sub-reason of a run that selected nobody', async () => {
 		const [ref] = await discoverRuns([fixture('serve-root', 'chat-no-candidate')]);
 		const summary = summariseRun(await readRunFiles(ref));
-		expect(summary.outcome).toBe('no_candidate (no_majority)');
+		expect(summary.outcome).toBe('no_candidate (invalid_output)');
 		expect(summary.outcomeColour).toBe('bad');
 	});
 
