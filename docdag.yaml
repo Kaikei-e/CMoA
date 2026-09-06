@@ -1,4 +1,4 @@
-# CMoA decision records, gated by DocDag v0.3.0.
+# CMoA decision records, gated by DocDag v0.4.1.
 #
 # The adr preset supplies supersedes / depends-on, status_drift, superseded_orphan,
 # and the accepted_unsuperseded binding projection. This file pins the corpus
