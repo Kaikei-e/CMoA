@@ -124,7 +124,7 @@ func TestRunChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Rule != RuleJudgePairwise || len(rec.AlsoPassed) != 0 {
+	if rec.Rule != RuleConsensusThenCopeland || len(rec.AlsoPassed) != 0 {
 		t.Errorf("select %+v", rec)
 	}
 	// Order is every candidate the run asked for, including the one that
@@ -145,24 +145,92 @@ func TestRunChat(t *testing.T) {
 	}
 }
 
-// A no_candidate carries its sub-reason all the way into select.json: the
-// distribution of those words is how a judge is measured.
-func TestRunChatNoCandidate(t *testing.T) {
+// A judge that calls every pair a tie no longer blocks the answer: the
+// draw is half a win to each side, and the chain parts them. The key it
+// used is in the reason, and so in select.json.
+func TestRunChatBreaksATie(t *testing.T) {
 	tk, dir := chatRun(t, map[string]string{"a": "alpha", "b": "beta"})
 	sel, err := RunChat(t.Context(), judgeServer(t, "nothing matches"), tk, dir, ChatOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	s, ok := sel.(Selected)
+	if !ok || s.CandidateID != "a" {
+		t.Fatalf("%#v", sel)
+	}
+	if !strings.Contains(s.Reason, "copeland tie") || !strings.Contains(s.Reason, "tie broken by hash") {
+		t.Errorf("reason %q", s.Reason)
+	}
+	rep, err := dir.ReadJudge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.TieBreak == nil || rep.TieBreak.Chosen != "a" || rep.Scores["a"] != 0.5 {
+		t.Errorf("tie break %+v scores %v", rep.TieBreak, rep.Scores)
+	}
+}
+
+// A no_candidate carries its sub-reason all the way into select.json: the
+// distribution of those words is how a judge is measured. What is left of
+// that vocabulary is the judge nobody could read.
+func TestRunChatNoCandidate(t *testing.T) {
+	tk, dir := chatRun(t, map[string]string{"a": "alpha", "b": "beta"})
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"content": "no json here, and none after the retry"}}},
+		})
+	}))
+	t.Cleanup(s.Close)
+	cfg, err := config.Parse([]byte(`{"version":2,"proposers":[{"id":"x","base_url":"http://127.0.0.1:1","model":"m"}],
+	  "harness":{"vault":"v"},"judge":{"base_url":"` + s.URL + `/v1","model":"j","parallel":3}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel, err := RunChat(t.Context(), cfg, tk, dir, ChatOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	n, ok := sel.(NoCandidate)
-	if !ok || n.Reason != trace.ReasonNoMajority || n.Tried != 2 {
+	if !ok || n.Reason != trace.ReasonInvalidOutput || n.Tried != 2 {
 		t.Fatalf("%#v", sel)
 	}
 	rec, err := dir.ReadSelect()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Selection.Kind != trace.SelectionNoCandidate || rec.Selection.Reason != string(trace.ReasonNoMajority) {
+	if rec.Selection.Kind != trace.SelectionNoCandidate || rec.Selection.Reason != string(trace.ReasonInvalidOutput) {
 		t.Errorf("%+v", rec.Selection)
+	}
+}
+
+// Two proposers that say the same thing are an answer, and no judge call is
+// spent on it.
+func TestRunChatConsensus(t *testing.T) {
+	tk, dir := chatRun(t, map[string]string{"a": "**101** です。", "b": "1 + 100 = 101"})
+	var calls atomic.Int32
+	s := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	t.Cleanup(s.Close)
+	cfg, err := config.Parse([]byte(`{"version":2,"proposers":[{"id":"x","base_url":"http://127.0.0.1:1","model":"m"}],
+	  "harness":{"vault":"v"},"judge":{"base_url":"` + s.URL + `/v1","model":"j","parallel":3}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sel, err := RunChat(t.Context(), cfg, tk, dir, ChatOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := sel.(Selected); !ok {
+		t.Fatalf("%#v", sel)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Errorf("a consensus spent %d judge calls", n)
+	}
+	rep, err := dir.ReadJudge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Consensus == nil || rep.Consensus.Agreement != trace.AgreementNumeric {
+		t.Fatalf("consensus %+v", rep.Consensus)
 	}
 }
 

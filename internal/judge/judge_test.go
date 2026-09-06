@@ -212,9 +212,12 @@ func TestAggregate(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		pairs  []trace.JudgePair
+		norm   map[string]string // normalised answers; nil means the chain has none
 		kind   trace.SelectionKind
 		id     string
 		reason string
+		key    trace.TieBreakKey // the tie-break key, empty when none was needed
+		scores map[string]float64
 		swap   int
 		draws  map[trace.DrawReason]int
 	}{
@@ -228,13 +231,44 @@ func TestAggregate(t *testing.T) {
 			kind: trace.SelectionSelected, id: "a", swap: 3,
 		},
 		{
-			name: "one pair disagrees under swap and is a draw",
+			// Position bias is half a win each, not a null: the pair the
+			// swap did not survive leaves a and b level, and the score
+			// decides instead of refusing.
+			name: "one pair disagrees under swap and scores a half to each",
 			pairs: []trace.JudgePair{
 				pair("a", "b", ok(trace.ChoiceA), ok(trace.ChoiceA)),
 				pair("a", "c", ok(trace.ChoiceA), ok(trace.ChoiceB)),
 				pair("b", "c", ok(trace.ChoiceA), ok(trace.ChoiceB)),
 			},
-			kind: trace.SelectionNoCandidate, reason: string(trace.ReasonNoMajority), swap: 2,
+			norm: map[string]string{"a": "alpha", "b": "beta", "c": "gamma"},
+			kind: trace.SelectionSelected, id: "a", key: trace.TieBreakHash, swap: 2,
+			scores: map[string]float64{"a": 1.5, "b": 1.5, "c": 0},
+			reason: "copeland tie, score 1.5 of 2, tie broken by hash among [a b]",
+		},
+		{
+			// The same top set, with answers: a and b say the same number,
+			// so centrality cannot part them and the shorter one wins.
+			name: "a top set is parted by the shortest answer",
+			pairs: []trace.JudgePair{
+				pair("a", "b", ok(trace.ChoiceA), ok(trace.ChoiceA)),
+				pair("a", "c", ok(trace.ChoiceA), ok(trace.ChoiceB)),
+				pair("b", "c", ok(trace.ChoiceA), ok(trace.ChoiceB)),
+			},
+			norm: map[string]string{"a": "the answer is 101", "b": "101", "c": "no idea"},
+			kind: trace.SelectionSelected, id: "b", key: trace.TieBreakLength,
+			reason: "copeland tie, score 1.5 of 2, tie broken by length among [a b]",
+		},
+		{
+			// c agrees with nobody and is not in the top set; a agrees with
+			// it, so a is the more central of the two that are tied.
+			name: "a top set is parted by agreement with the rest of the run",
+			pairs: []trace.JudgePair{
+				pair("a", "b", ok(trace.ChoiceA), ok(trace.ChoiceA)),
+				pair("a", "c", ok(trace.ChoiceA), ok(trace.ChoiceB)),
+				pair("b", "c", ok(trace.ChoiceA), ok(trace.ChoiceB)),
+			},
+			norm: map[string]string{"a": "the answer is 101", "b": "42", "c": "101"},
+			kind: trace.SelectionSelected, id: "a", key: trace.TieBreakConsensus,
 		},
 		{
 			name: "a tie in one order is a draw for the pair",
@@ -243,25 +277,38 @@ func TestAggregate(t *testing.T) {
 				pair("a", "c", ok(trace.ChoiceA), ok(trace.ChoiceB)),
 				pair("b", "c", ok(trace.ChoiceA), ok(trace.ChoiceB)),
 			},
-			kind: trace.SelectionNoCandidate, reason: string(trace.ReasonNoMajority), swap: 2,
+			norm: map[string]string{"a": "alpha", "b": "beta", "c": "gamma"},
+			kind: trace.SelectionSelected, id: "a", key: trace.TieBreakHash, swap: 2,
+			scores: map[string]float64{"a": 1.5, "b": 1.5, "c": 0},
 		},
 		{
+			// A cycle is a property of the judge, not an error: every
+			// candidate scores one win and one loss, and the chain decides
+			// — here past a length gate that refuses to separate "one"
+			// from "two", and on the digest of the answers themselves.
 			name: "the wins run in a circle",
 			pairs: []trace.JudgePair{
 				pair("a", "b", ok(trace.ChoiceA), ok(trace.ChoiceB)),
 				pair("b", "c", ok(trace.ChoiceA), ok(trace.ChoiceB)),
 				pair("a", "c", ok(trace.ChoiceB), ok(trace.ChoiceA)),
 			},
-			kind: trace.SelectionNoCandidate, reason: string(trace.ReasonCycle), swap: 3,
+			norm: map[string]string{"a": "one", "b": "two", "c": "three"},
+			kind: trace.SelectionSelected, id: "b", key: trace.TieBreakHash, swap: 3,
+			scores: map[string]float64{"a": 1, "b": 1, "c": 1},
 		},
 		{
+			// Three candidates the judge called equal are three candidates
+			// worth half a win each: the answer is one of them, not none.
 			name: "nothing was decided at all",
 			pairs: []trace.JudgePair{
 				pair("a", "b", ok(trace.ChoiceTie), ok(trace.ChoiceTie)),
 				pair("a", "c", ok(trace.ChoiceTie), ok(trace.ChoiceTie)),
 				pair("b", "c", ok(trace.ChoiceTie), ok(trace.ChoiceTie)),
 			},
-			kind: trace.SelectionNoCandidate, reason: string(trace.ReasonAllDraws), swap: 3,
+			norm: map[string]string{"a": "a longer answer", "b": "short", "c": "a third answer"},
+			kind: trace.SelectionSelected, id: "b", key: trace.TieBreakLength, swap: 3,
+			scores: map[string]float64{"a": 1, "b": 1, "c": 1},
+			reason: "copeland tie, score 1 of 2, tie broken by length among [a b c]",
 		},
 		{
 			name: "an unparsable answer is its own reason",
@@ -287,9 +334,11 @@ func TestAggregate(t *testing.T) {
 			kind: trace.SelectionJudgeFailed, reason: "HTTP 500",
 		},
 		{
-			name:  "two candidates, one pair, a draw is no majority",
+			name:  "two candidates, one pair, a draw is half a win each",
 			pairs: []trace.JudgePair{pair("a", "b", ok(trace.ChoiceA), ok(trace.ChoiceA))},
-			kind:  trace.SelectionNoCandidate, reason: string(trace.ReasonNoMajority),
+			norm:  map[string]string{"a": "alpha", "b": "beta"},
+			kind:  trace.SelectionSelected, id: "a", key: trace.TieBreakHash,
+			scores: map[string]float64{"a": 0.5, "b": 0.5},
 		},
 		{
 			name:  "two candidates, one pair, both orders agree",
@@ -333,8 +382,12 @@ func TestAggregate(t *testing.T) {
 				pair("x", "z", ok(trace.ChoiceTie), ok(trace.ChoiceTie)),
 				pair("y", "z", trace.JudgeOrder{Status: trace.JudgeCallTimeout}, trace.JudgeOrder{Status: trace.JudgeCallTimeout}),
 			},
-			kind: trace.SelectionNoCandidate, reason: string(trace.ReasonAllDraws), swap: 2,
-			draws: map[trace.DrawReason]int{trace.DrawTie: 2, trace.DrawUnmeasured: 1},
+			// An unmeasured pair scores nothing for either side, so x's two
+			// halves beat the halves y and z did not get.
+			kind: trace.SelectionSelected, id: "x", swap: 2,
+			scores: map[string]float64{"x": 1, "y": 0.5, "z": 0.5},
+			reason: "copeland winner, score 1 of 2 (no condorcet winner)",
+			draws:  map[trace.DrawReason]int{trace.DrawTie: 2, trace.DrawUnmeasured: 1},
 		},
 		{
 			name:  "two candidates, the only pair times out",
@@ -358,7 +411,7 @@ func TestAggregate(t *testing.T) {
 			for _, id := range rep.Candidates {
 				rep.Wins[id] = 0
 			}
-			Aggregate(rep)
+			Aggregate(rep, tc.norm)
 			if rep.Outcome.Kind != tc.kind {
 				t.Fatalf("kind %q, want %q (%s)", rep.Outcome.Kind, tc.kind, rep.Outcome.Reason)
 			}
@@ -373,6 +426,28 @@ func TestAggregate(t *testing.T) {
 			}
 			if tc.draws != nil && fmt.Sprint(rep.DrawReasons) != fmt.Sprint(tc.draws) {
 				t.Errorf("draw reasons %v, want %v", rep.DrawReasons, tc.draws)
+			}
+			if tc.scores != nil && fmt.Sprint(rep.Scores) != fmt.Sprint(tc.scores) {
+				t.Errorf("scores %v, want %v", rep.Scores, tc.scores)
+			}
+			// A tie-break is recorded exactly when one was needed, and it
+			// names the candidate the outcome selected.
+			switch {
+			case tc.key == "" && rep.TieBreak != nil:
+				t.Errorf("unwanted tie break %+v", rep.TieBreak)
+			case tc.key != "" && rep.TieBreak == nil:
+				t.Errorf("no tie break recorded, want key %q", tc.key)
+			case tc.key != "":
+				if rep.TieBreak.Key != tc.key || rep.TieBreak.Chosen != tc.id {
+					t.Errorf("tie break %+v, want key %q chosen %q", rep.TieBreak, tc.key, tc.id)
+				}
+			}
+			// The same input twice is the same choice: nothing in the chain
+			// reads a map's iteration order or a clock.
+			again := &trace.JudgeReport{Candidates: candidateIDs(tc.pairs), Wins: map[string]int{}, Pairs: tc.pairs}
+			Aggregate(again, tc.norm)
+			if fmt.Sprint(again.Outcome) != fmt.Sprint(rep.Outcome) || fmt.Sprint(again.Ranked) != fmt.Sprint(rep.Ranked) {
+				t.Errorf("not deterministic: %v %v then %v %v", rep.Outcome, rep.Ranked, again.Outcome, again.Ranked)
 			}
 			// Every draw names why, and every decided pair names nothing.
 			for _, p := range rep.Pairs {

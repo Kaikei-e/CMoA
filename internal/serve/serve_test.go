@@ -187,10 +187,49 @@ func TestCompletion(t *testing.T) {
 	}
 }
 
-// Two identical answers are a draw under both orders, and a draw is not an
-// answer: the caller gets a 502 with the sub-reason, not a 200.
+// cmoaBlock is the `cmoa` extension as a client reads it.
+type cmoaBlock struct {
+	RunID     string `json:"run_id"`
+	Selection struct {
+		Kind      string   `json:"kind"`
+		Reason    string   `json:"reason"`
+		Score     *float64 `json:"score"`
+		Consensus *struct {
+			Normalisation, Agreement string
+			Agreed, Of               int
+		} `json:"consensus"`
+		TieBreak *struct {
+			Key   string `json:"key"`
+			Among int    `json:"among"`
+		} `json:"tie_break"`
+	} `json:"selection"`
+	Judge struct {
+		Calls int `json:"calls"`
+	} `json:"judge"`
+}
+
+func cmoaOf(t *testing.T, w *httptest.ResponseRecorder) cmoaBlock {
+	t.Helper()
+	var got struct {
+		CMoA cmoaBlock `json:"cmoa"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	return got.CMoA
+}
+
+// No candidate is the residual case now: a judge whose answers no parser
+// could read is still 502 with the sub-reason, not a 200.
 func TestNoCandidateIs502(t *testing.T) {
-	h, _ := server(t, &fleet{t: t, answer: "the same answer twice", wants: "nothing"})
+	unreadable := &fleet{t: t, answer: "an answer", other: "a different answer", wants: "an answer"}
+	unreadable.judge = func(w http.ResponseWriter) bool {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{"message": map[string]any{"content": "not json, and not json after the retry either"}}},
+		})
+		return true
+	}
+	h, _ := server(t, unreadable)
 	w := post(t, h, ask)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("%d: %s", w.Code, w.Body)
@@ -201,11 +240,59 @@ func TestNoCandidateIs502(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Error.Type != "no_candidate" || got.Error.Code != string(trace.ReasonNoMajority) || got.Error.Param == "" {
+	if got.Error.Type != "no_candidate" || got.Error.Code != string(trace.ReasonInvalidOutput) || got.Error.Param == "" {
 		t.Errorf("%+v", got.Error)
 	}
-	if !strings.Contains(got.Error.Message, "no_majority") {
+	if !strings.Contains(got.Error.Message, "invalid_output") {
 		t.Errorf("message %q", got.Error.Message)
+	}
+}
+
+// Two proposers that say the same thing are answered with 200, no judge
+// call, and a consensus block that says how they agreed — in counts, not in
+// proposer ids.
+func TestConsensusIs200(t *testing.T) {
+	h, _ := server(t, &fleet{t: t, answer: "**101** です。", other: "1 + 100 = 101", wants: "nothing"})
+	w := post(t, h, ask)
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d: %s", w.Code, w.Body)
+	}
+	got := cmoaOf(t, w)
+	if got.Selection.Kind != "selected" || got.Judge.Calls != 0 {
+		t.Fatalf("cmoa %+v", got.Selection)
+	}
+	c := got.Selection.Consensus
+	if c == nil || c.Agreement != "numeric" || c.Agreed != 2 || c.Of != 2 || c.Normalisation == "" {
+		t.Fatalf("consensus %+v", c)
+	}
+	if !strings.Contains(got.Selection.Reason, "consensus: 2 of 2") {
+		t.Errorf("reason %q", got.Selection.Reason)
+	}
+	if strings.Contains(w.Body.String(), "p1") || strings.Contains(w.Body.String(), "p2") {
+		t.Error("the response must not name the proposers")
+	}
+}
+
+// A judge that calls the pair a tie is answered with 200 too, and the
+// tie-break block says which key parted them and how many were tied — never
+// which candidates they were.
+func TestTieBreakIs200(t *testing.T) {
+	h, _ := server(t, &fleet{t: t, answer: "alpha", other: "beta", wants: "nothing"})
+	w := post(t, h, ask)
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d: %s", w.Code, w.Body)
+	}
+	got := cmoaOf(t, w)
+	tb := got.Selection.TieBreak
+	if tb == nil || tb.Key != "hash" || tb.Among != 2 {
+		t.Fatalf("tie break %+v", tb)
+	}
+	if got.Selection.Score == nil || *got.Selection.Score != 0.5 || got.Judge.Calls != 2 {
+		t.Errorf("score %v calls %d", got.Selection.Score, got.Judge.Calls)
+	}
+	// The reason explains the key without naming the candidates it parted.
+	if !strings.Contains(got.Selection.Reason, "tie broken by hash") || strings.Contains(got.Selection.Reason, "[") {
+		t.Errorf("reason %q", got.Selection.Reason)
 	}
 }
 

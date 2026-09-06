@@ -1,17 +1,29 @@
-// Package judge is the chat face's aggregation: a single model is asked to
-// compare candidates two at a time, in both orders, and the answer is
-// selected only when it wins every pair it appears in. There is no panel,
+// Package judge is the chat face's aggregation: the candidates are first
+// compared with each other, and only when they disagree is a single model
+// asked to compare them two at a time, in both orders. There is no panel,
 // no synthesis and no vote among proposers.
 //
-// The protocol is round-robin pairwise with an order swap: three candidates
-// make three pairs and six calls. A pair is won only when both orders name
-// the same candidate; disagreement, or a tie in either order, is a draw and
-// scores nothing for either side. A unique candidate that wins every pair
-// is the Condorcet winner and is selected; anything else is no candidate,
-// with a sub-reason. There is no re-ask beyond one retry for malformed
-// JSON, and no deterministic fallback: choosing "the first" or "the
-// shorter" answer would reinstate as a rule exactly the position and length
-// biases the swap is there to detect.
+// Stage 1 is consensus. Every answer is normalised — see Normalize — and
+// when more than half the candidates say the same thing, one of them is
+// returned and the judge is never called. Agreement between independent
+// proposers is evidence in its own right, and it is the cheapest evidence
+// in the system: it costs nothing and it arrives first.
+//
+// Stage 2 is the judge, round-robin pairwise with an order swap: three
+// candidates make three pairs and six calls. A pair is won only when both
+// orders name the same candidate; a tie in either order, or a disagreement
+// between the orders, is a draw. Draws are not discarded — a win scores 1
+// and a draw the judge answered scores 0.5 to each side, which is the
+// Copeland score, and the swap protocol's own reading of an inconsistent
+// pair as a tie. A candidate that wins every pair is still named the
+// Condorcet winner; otherwise the highest score is selected, and candidates
+// the score cannot part go to the deterministic chain in tieBreak. A draw
+// nobody could measure scores nothing, and a judge that timed out or could
+// not be reached is still a failure rather than a score.
+//
+// So no_candidate now means only that there was nothing to select between,
+// or that the judge could not be read: too_few_candidates and
+// invalid_output. There is no re-ask beyond one retry for malformed JSON.
 //
 // Everything the judge saw is reconstructible from the trace: the
 // permutation and the nonce, the exact request and response of every call,
@@ -32,7 +44,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -146,7 +158,21 @@ func (j *Judge) Run(ctx context.Context, in Input) (*trace.JudgeReport, error) {
 	rep.Presentation = trace.Presentation{Seed: seed, SeedSource: seedSource, Nonce: nonce}
 
 	if len(in.Candidates) < 2 {
-		Aggregate(rep)
+		Aggregate(rep, nil)
+		return rep, j.finish(rep, started, now)
+	}
+
+	// Stage 1, before the call list exists: a unanimous answer costs no
+	// judge call at all. The sanitised text is what is compared, so the
+	// candidates are read exactly as the judge would have read them.
+	norm := map[string]string{}
+	for i, c := range in.Candidates {
+		norm[c.ID] = Normalize(texts[i])
+	}
+	if cons, tb := consensus(rep.Candidates, norm); cons != nil {
+		rep.Consensus, rep.TieBreak = cons, tb
+		logf("consensus: %d of %d agree (%s), no judge call", len(tb.Among), len(rep.Candidates), cons.Agreement)
+		Aggregate(rep, norm)
 		return rep, j.finish(rep, started, now)
 	}
 
@@ -218,7 +244,7 @@ func (j *Judge) Run(ctx context.Context, in Input) (*trace.JudgeReport, error) {
 		return nil, writeErr
 	}
 
-	Aggregate(rep)
+	Aggregate(rep, norm)
 	return rep, j.finish(rep, started, now)
 }
 
@@ -689,8 +715,14 @@ func LastObject(s string) (string, error) {
 }
 
 // Aggregate fills the pair verdicts and their draw reasons, the wins, the
-// ranking and the outcome of a report whose orders have been answered.
-func Aggregate(rep *trace.JudgeReport) {
+// scores, the ranking and the outcome of a report whose orders have been
+// answered.
+//
+// norm holds each candidate's normalised answer, by id; it is what the
+// tie-break's first two keys read. It may be nil — a caller that has only
+// the pairs still gets a deterministic outcome, decided one key further
+// down the chain.
+func Aggregate(rep *trace.JudgeReport, norm map[string]string) {
 	rep.DrawReasons = map[trace.DrawReason]int{}
 	for i := range rep.Pairs {
 		p := &rep.Pairs[i]
@@ -714,8 +746,9 @@ func Aggregate(rep *trace.JudgeReport) {
 		p.DrawReason = drawReason(a, b)
 		rep.DrawReasons[p.DrawReason]++
 	}
-	rep.Ranked = ranked(rep.Candidates, rep.Wins)
-	rep.Outcome = outcome(rep)
+	rep.Scores = scores(rep)
+	rep.Ranked = ranked(rep.Candidates, rep.Scores, norm)
+	rep.Outcome = outcome(rep, norm)
 }
 
 // drawReason says why one pair produced no winner, most severe first: a
@@ -738,8 +771,9 @@ func drawReason(a, b trace.JudgeOrder) trace.DrawReason {
 	return trace.DrawDisagree
 }
 
-// outcome reads the wins first and only then asks whether a failed call
-// mattered.
+// outcome reads the consensus, then the wins, and only then asks whether a
+// failed call mattered. It records the tie-break it needed, next to the
+// outcome that needed it.
 //
 // A pair that was never answered does not discard a winner it could not
 // have unseated: if one candidate has already beaten every other, no answer
@@ -748,9 +782,28 @@ func drawReason(a, b trace.JudgeOrder) trace.DrawReason {
 // failure is escalated only when the missing answers could still decide the
 // outcome — that is, when some candidate could still reach a clean sweep if
 // every unanswered pair went its way.
-func outcome(rep *trace.JudgeReport) trace.JudgeOutcome {
+//
+// Everything after that is the score. A machine failure still outranks it:
+// an unmeasured pair that could have decided is a timeout or a transport
+// error, and a pair no parser could read is invalid_output, because neither
+// is a judgment the score is entitled to spend.
+func outcome(rep *trace.JudgeReport, norm map[string]string) trace.JudgeOutcome {
 	if len(rep.Candidates) < 2 {
 		return trace.JudgeOutcome{Kind: trace.SelectionNoCandidate, Reason: string(trace.ReasonTooFewCandidates)}
+	}
+	if c := rep.Consensus; c != nil {
+		agreed := 0
+		for _, g := range c.Groups {
+			if len(g) > agreed {
+				agreed = len(g)
+			}
+		}
+		return trace.JudgeOutcome{
+			Kind:        trace.SelectionSelected,
+			CandidateID: c.Chosen,
+			Reason: fmt.Sprintf("consensus: %d of %d agree on the normalised answer (%s)",
+				agreed, len(rep.Candidates), c.Agreement),
+		}
 	}
 	// A Condorcet winner beats every other candidate; with n candidates
 	// that is n-1 pairs, and there can be at most one.
@@ -771,35 +824,38 @@ func outcome(rep *trace.JudgeReport) trace.JudgeOutcome {
 	if o := escalate(rep, need); o != nil {
 		return *o
 	}
-	decided, unmeasured, invalid := 0, 0, 0
 	for _, p := range rep.Pairs {
-		switch p.DrawReason {
-		case "":
-			decided++
-		case trace.DrawUnmeasured:
-			unmeasured++
-		case trace.DrawInvalid:
-			invalid++
-		case trace.DrawTie, trace.DrawDisagree:
+		if p.DrawReason == trace.DrawInvalid {
+			// An answer no parser could read is not a draw the score may
+			// spend: the judge was asked and never said anything.
+			return trace.JudgeOutcome{Kind: trace.SelectionNoCandidate, Reason: string(trace.ReasonInvalidOutput)}
 		}
 	}
-	reason := trace.ReasonNoMajority
-	switch {
-	case invalid > 0:
-		reason = trace.ReasonInvalidOutput
-	case decided == 0 && len(rep.Pairs) > 1:
-		// A union: every pair failed to decide, whether by tie, by
-		// contradiction under swap, or because it was never measured.
-		// pairs[].draw_reason is where the split lives.
-		reason = trace.ReasonAllDraws
-	case decided+unmeasured == len(rep.Pairs) && unmeasured == 0:
-		// Every pair was decided and still nobody beat everybody: the wins
-		// run in a circle, which is a property of the judge, not of a
-		// missing answer.
-		reason = trace.ReasonCycle
+	// The Copeland score. Nobody swept, so the highest score is selected;
+	// no cycle, no all-draws and no blocked majority is a refusal any more,
+	// because a draw is half a win rather than the absence of one.
+	best, top := topScore(rep.Candidates, rep.Scores)
+	if len(top) == 0 {
+		return trace.JudgeOutcome{Kind: trace.SelectionNoCandidate, Reason: string(trace.ReasonNoMajority)}
 	}
-	return trace.JudgeOutcome{Kind: trace.SelectionNoCandidate, Reason: string(reason)}
+	if len(top) == 1 {
+		return trace.JudgeOutcome{
+			Kind: trace.SelectionSelected, CandidateID: top[0],
+			Reason: fmt.Sprintf("copeland winner, score %s of %d (no condorcet winner)", number(best), need),
+		}
+	}
+	chosen, key := tieBreak(top, rep.Candidates, norm)
+	among := inOrder(top, rep.Candidates)
+	rep.TieBreak = &trace.TieBreak{Among: among, Key: key, Chosen: chosen}
+	return trace.JudgeOutcome{
+		Kind: trace.SelectionSelected, CandidateID: chosen,
+		Reason: fmt.Sprintf("copeland tie, score %s of %d, tie broken by %s among %v",
+			number(best), need, key, among),
+	}
 }
+
+// number prints a score the way a reader writes it: 2, not 2.0.
+func number(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
 // escalate returns judge_timeout or judge_failed when the pairs that were
 // never answered could still have produced a winner, and nil when they
@@ -846,12 +902,4 @@ func escalate(rep *trace.JudgeReport, need int) *trace.JudgeOutcome {
 		return &trace.JudgeOutcome{Kind: trace.SelectionJudgeTimeout, Reason: "the judge did not answer in time"}
 	}
 	return &trace.JudgeOutcome{Kind: trace.SelectionJudgeFailed, Reason: failed.Error}
-}
-
-// ranked orders the candidates by wins, breaking ties by the caller's
-// order. It is informational: only the outcome selects.
-func ranked(ids []string, wins map[string]int) []string {
-	out := append([]string{}, ids...)
-	sort.SliceStable(out, func(i, k int) bool { return wins[out[i]] > wins[out[k]] })
-	return out
 }
