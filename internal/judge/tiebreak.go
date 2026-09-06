@@ -8,59 +8,6 @@ import (
 	"github.com/Kaikei-e/CMoA/internal/trace"
 )
 
-// lengthGateRatio is how much longer the longest tied answer must be than
-// the shortest before brevity is allowed to decide. It is a tunable, not a
-// measured optimum: below it the difference is a matter of phrasing, and
-// letting a word or two of politeness pick the answer would be a length
-// bias rather than a counter-lever to one.
-const lengthGateRatio = 1.5
-
-// Text is one candidate's answer as the tie-break reads it: the normalised
-// form every key uses, and the raw form, read only to part two candidates
-// whose normalised text is the same to the byte.
-type Text struct{ Norm, Raw string }
-
-// Texts is the answers of one run, by candidate id. It may be nil: a caller
-// that has only the pairs still gets a deterministic outcome, decided one
-// key further down the chain.
-type Texts map[string]Text
-
-func (t Texts) norm(id string) string { return t[id].Norm }
-
-// scores is the Copeland score of every candidate: a win is 1, and a draw
-// the judge did answer is half a win to each side.
-//
-// A tie and a disagreement under swap both score 0.5, and that is the whole
-// point: MT-Bench's protocol is to swap the order and call an inconsistent
-// pair a tie, so a pair the swap did not survive is half-and-half evidence,
-// not the absence of evidence. Why it drew is a different question, and
-// pairs[].draw_reason is where that answer lives.
-//
-// A draw nobody could measure — a timeout, a transport error, an answer no
-// parser could read — scores nothing for either side. A machine failure is
-// not a judgment, and paying half a win for one would let an unreachable
-// judge decide.
-func scores(rep *trace.JudgeReport) map[string]float64 {
-	out := map[string]float64{}
-	for _, id := range rep.Candidates {
-		out[id] = 0
-	}
-	for _, p := range rep.Pairs {
-		if p.Verdict != trace.VerdictDraw {
-			out[p.Verdict]++
-			continue
-		}
-		switch p.DrawReason {
-		case trace.DrawTie, trace.DrawDisagree:
-			for _, id := range p.Pair {
-				out[id] += 0.5
-			}
-		case trace.DrawInvalid, trace.DrawUnmeasured, "":
-		}
-	}
-	return out
-}
-
 // tieBreakKeys is the chain, most meaningful first. Each key narrows the
 // set it is given; the first one that narrows it to a single candidate has
 // decided.

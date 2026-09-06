@@ -2,7 +2,8 @@
 
 CMoA writes one directory per run and never reads it back, except that
 `select` reads the candidates `propose` left in the same run. uzushio and
-people read the rest. The Go types are in `internal/trace/trace.go`; this
+people read the rest. The Go types are grouped by record in `internal/trace/`
+(`run.go`, `candidate.go`, `judge.go`, `selection.go`, and `verification.go`); this
 page is the contract for readers outside the module.
 
 ```

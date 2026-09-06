@@ -118,6 +118,32 @@ func TestEmptyReference(t *testing.T) {
 	}
 }
 
+// Documents and diffs use the same task-relative path reader, but retain
+// their distinct content rules: judge documents are prompt text, while a
+// reference diff may deliberately be empty or contain arbitrary bytes.
+func TestTaskFileContentRules(t *testing.T) {
+	dir := t.TempDir()
+	tk := &Task{Dir: dir}
+	writeFile(t, filepath.Join(dir, "empty"), "")
+	writeFile(t, filepath.Join(dir, "binary"), "\xff")
+
+	if _, _, err := tk.readTaskFile("empty"); err == nil || !strings.Contains(err.Error(), "empty is empty") {
+		t.Fatalf("empty document error = %v", err)
+	}
+	if diff, err := tk.readDiff("empty", allowEmpty); err != nil || diff != "" {
+		t.Fatalf("empty reference = %q, %v", diff, err)
+	}
+	if _, _, err := tk.readTaskFile("binary"); err == nil || !strings.Contains(err.Error(), "binary is not valid UTF-8") {
+		t.Fatalf("binary document error = %v", err)
+	}
+	if diff, err := tk.readDiff("binary", requireDiff); err != nil || diff != "\xff" {
+		t.Fatalf("binary diff = %q, %v", diff, err)
+	}
+	if _, _, err := tk.readTaskFile("../escape"); err == nil || !strings.Contains(err.Error(), "escapes the task directory") {
+		t.Fatalf("escaped document error = %v", err)
+	}
+}
+
 func TestLoadV2(t *testing.T) {
 	const m = `{"version":2,"id":"hello","repo":"repo","files":["add.go"],
 	"verify":{"kind":"band","timeout_seconds":90},

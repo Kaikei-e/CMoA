@@ -108,6 +108,29 @@ func TestCandidateAndVerifyFiles(t *testing.T) {
 	}
 }
 
+func TestChatCandidateFiles(t *testing.T) {
+	d, err := Create(t.TempDir(), NewRunID(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Candidate{ProposerID: "p1", Face: FaceChat, Status: CandidateOK}
+	if err := d.WriteChatCandidate(c, []byte("raw"), "answer"); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(d.CandidateAnswer("p1")); err != nil || string(b) != "answer" {
+		t.Fatalf("answer = %q, %v", b, err)
+	}
+	if _, err := os.Stat(d.CandidateDiff("p1")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("chat candidate should not create diff: %v", err)
+	}
+	if err := d.WriteChatCandidate(&Candidate{ProposerID: "p2", Face: FaceChat, Status: CandidateEmpty}, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(d.CandidateAnswer("p2")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty answer should not create text file: %v", err)
+	}
+}
+
 func TestWriteVerification(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "verification")
 	v := &Verification{
