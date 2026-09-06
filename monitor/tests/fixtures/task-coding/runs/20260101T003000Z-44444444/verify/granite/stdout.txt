@@ -1,0 +1,2 @@
+PASS
+ok  	example/hello	0.004s

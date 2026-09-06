@@ -1,0 +1,17 @@
+{
+  "model": "granite-4.2-8b",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Placeholder system prompt."
+    },
+    {
+      "role": "user",
+      "content": "Placeholder user prompt."
+    }
+  ],
+  "temperature": 0.2,
+  "max_tokens": 512,
+  "seed": 42,
+  "stream": false
+}

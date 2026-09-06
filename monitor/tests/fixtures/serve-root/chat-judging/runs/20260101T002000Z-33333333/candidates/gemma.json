@@ -1,0 +1,31 @@
+{
+  "proposer_id": "gemma",
+  "model": "gemma-4-12b",
+  "face": "chat",
+  "status": "ok",
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 146,
+    "completion_tokens": 100
+  },
+  "timings": {
+    "request_ms": 13298,
+    "server_prompt_ms": 1015.267,
+    "server_predicted_ms": 12282.733,
+    "tokens_per_second": 8.1
+  },
+  "answer_sha256": "03978c4d9d0bf73b6054bd2fbd97644f91b1f2dede4c30f21e8852213a6af8f3",
+  "answer_bytes": 113,
+  "metadata": {
+    "token_len": 100,
+    "chars": 113,
+    "header_count": 0,
+    "list_count": 0,
+    "bold_count": 0,
+    "code_fence_count": 0
+  },
+  "request_sha256": "0fa61880cc3d9c16feb18619e49142145e1c96fd21972377683951d31a4004e1",
+  "response_sha256": "5fa9517f2cdfcb92b96b455200e1f6fc12e28aa218187a11e5312d55212e854a",
+  "started_at": "2026-01-01T00:00:00.002000000Z",
+  "finished_at": "2026-01-01T00:00:13.300000000Z"
+}

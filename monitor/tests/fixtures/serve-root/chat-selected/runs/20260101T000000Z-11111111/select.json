@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "run_id": "20260101T000000Z-11111111",
+  "rule": "judge-pairwise",
+  "order": [
+    "granite",
+    "qwen",
+    "gemma"
+  ],
+  "selection": {
+    "kind": "selected",
+    "candidate_id": "gemma",
+    "reason": "condorcet winner, 2 of 3 pairs agreed under both orders"
+  },
+  "also_passed": [],
+  "ranked": [
+    "gemma",
+    "granite",
+    "qwen"
+  ],
+  "max_parallel": 3,
+  "finished_at": "2026-01-01T00:01:55.500000000Z"
+}

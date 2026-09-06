@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "run_id": "20260101T003000Z-44444444",
+  "rule": "first",
+  "order": [
+    "granite",
+    "qwen",
+    "gemma"
+  ],
+  "selection": {
+    "kind": "selected",
+    "candidate_id": "granite",
+    "reason": "first passing candidate in configured order"
+  },
+  "also_passed": [
+    "gemma"
+  ],
+  "max_parallel": 1,
+  "finished_at": "2026-01-01T00:00:30.500000000Z"
+}

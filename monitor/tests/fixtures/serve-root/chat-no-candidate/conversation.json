@@ -1,0 +1,6 @@
+[
+  {
+    "role": "user",
+    "content": "Explain the difference between a nil slice and an empty slice in three sentences, with one example where the difference actually bites."
+  }
+]

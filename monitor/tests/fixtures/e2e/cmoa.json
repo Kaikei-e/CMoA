@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "proposers": [
+    {
+      "id": "granite",
+      "base_url": "http://127.0.0.1:8481/v1",
+      "model": "granite-4.2-8b",
+      "max_tokens": 512
+    },
+    {
+      "id": "qwen",
+      "base_url": "http://127.0.0.1:8482/v1",
+      "model": "qwen3.5-9b",
+      "max_tokens": 512
+    },
+    {
+      "id": "gemma",
+      "base_url": "http://127.0.0.1:8483/v1",
+      "model": "gemma-4-12b",
+      "max_tokens": 512
+    }
+  ],
+  "harness": {
+    "vault": "/srv/example/vault"
+  },
+  "judge": {
+    "base_url": "http://127.0.0.1:8490/v1",
+    "model": "gpt-oss-20b",
+    "seed": 7,
+    "parallel": 6
+  },
+  "serve": {
+    "listen": "127.0.0.1:8495",
+    "runs_dir": "../serve-root"
+  }
+}

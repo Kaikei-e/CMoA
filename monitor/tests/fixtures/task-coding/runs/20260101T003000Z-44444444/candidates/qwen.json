@@ -1,0 +1,29 @@
+{
+  "proposer_id": "qwen",
+  "model": "qwen3.5-9b",
+  "face": "coding",
+  "status": "ok",
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 884,
+    "completion_tokens": 110
+  },
+  "timings": {
+    "request_ms": 7201,
+    "server_prompt_ms": 125.123,
+    "server_predicted_ms": 7075.877,
+    "tokens_per_second": 15.9
+  },
+  "diff": {
+    "files": [
+      "add.go"
+    ],
+    "additions": 1,
+    "deletions": 1,
+    "sha256": "8e2a16622a9391c36a81f35b5daa51877aa06f101622fa60045123e8f74a0c8b"
+  },
+  "request_sha256": "6ff828a67ba5150a0dbc3150f3177d30a197bc6144735802a3a8555c6e6a44e8",
+  "response_sha256": "f606f69a4310bdea4081b69497e0da005d9bea8566bbcd28105a38ddc68c1223",
+  "started_at": "2026-01-01T00:00:00.002000000Z",
+  "finished_at": "2026-01-01T00:00:07.200000000Z"
+}

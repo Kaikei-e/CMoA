@@ -1,0 +1,23 @@
+[
+  {
+    "id": 0,
+    "n_ctx": 8192,
+    "speculative": false,
+    "is_processing": true,
+    "id_task": 1800,
+    "n_prompt_tokens": 412,
+    "n_prompt_tokens_processed": 412,
+    "n_prompt_tokens_cache": 0,
+    "params": {
+      "seed": 42,
+      "temperature": 0.2,
+      "max_tokens": 512,
+      "n_predict": 512,
+      "stream": false
+    },
+    "next_token": {
+      "has_next_token": true,
+      "n_decoded": 42
+    }
+  }
+]

@@ -1,0 +1,23 @@
+{
+  "candidate_id": "granite",
+  "status": "pass",
+  "exit_code": 0,
+  "duration_ms": 3288,
+  "command": [
+    "docker",
+    "compose",
+    "-f",
+    "/srv/example/tasks/task-hello/compose.yaml",
+    "-p",
+    "cmoa-hello-granite",
+    "run",
+    "--rm",
+    "--no-deps",
+    "-T",
+    "--quiet-pull",
+    "verify"
+  ],
+  "project_name": "cmoa-hello-granite",
+  "started_at": "2026-01-01T00:00:20.000000000Z",
+  "finished_at": "2026-01-01T00:00:23.300000000Z"
+}

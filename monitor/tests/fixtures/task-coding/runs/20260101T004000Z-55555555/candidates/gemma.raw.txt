@@ -1,0 +1,9 @@
+Placeholder completion for gemma.
+
+```diff
+--- a/add.go
++++ b/add.go
+@@
+-// placeholder diff line removed
++// placeholder diff line added
+```
