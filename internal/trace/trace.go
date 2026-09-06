@@ -89,6 +89,10 @@ const (
 	// OriginExternal: the candidates were named on the command line by
 	// `cmoa judge`, and no proposer was asked.
 	OriginExternal = "external"
+	// OriginReplay: the candidates and every judge answer were read back
+	// from a run that had already been made. Nothing was asked of any
+	// server, and Run.Replayed says which run was read.
+	OriginReplay = "replay"
 )
 
 // VerifyStatus is what select concluded about one candidate.
@@ -195,6 +199,37 @@ type Run struct {
 	ConversationSHA256 string              `json:"conversation_sha256,omitempty"`
 	CandidatesOrigin   string              `json:"candidates_origin,omitempty"`
 	ExternalCandidates []ExternalCandidate `json:"external_candidates,omitempty"`
+	// Replayed is present only when the judge was not asked anything: the
+	// answers came from the run it names. It is the one field that tells a
+	// re-aggregation from a measurement, so it is written into run.json
+	// rather than left to be inferred from a latency of nothing.
+	Replayed *Replayed `json:"replayed_from,omitempty"`
+}
+
+// Replayed pins the run whose recorded answers were re-aggregated.
+//
+// The digests are of the source's own files as they were read. A replay is
+// only as good as the record it read, and a record that changed under it is
+// the one failure that would otherwise be invisible: the outcome would
+// still look like arithmetic over calls nobody can now see.
+type Replayed struct {
+	RunID RunID `json:"run_id"`
+	// Dir is the source run directory as it was named on the command line.
+	Dir string `json:"dir"`
+	// PromptVersion is the source's, and a replay refuses unless it is the
+	// binary's own: the same recorded answer to a different question is
+	// not the same measurement.
+	PromptVersion string `json:"prompt_version"`
+	// JudgeSHA256 is the digest of the source judge.json, and Calls the
+	// digest of every call file that was replayed, in file-name order.
+	JudgeSHA256 string         `json:"judge_sha256"`
+	Calls       []ReplayedCall `json:"calls"`
+}
+
+// ReplayedCall is one source call file and the digest it was read at.
+type ReplayedCall struct {
+	File   string `json:"file"`
+	SHA256 string `json:"sha256"`
 }
 
 // ExternalCandidate is one answer `cmoa judge` was handed on the command

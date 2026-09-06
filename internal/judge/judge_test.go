@@ -117,7 +117,7 @@ func fixture(t *testing.T, h http.Handler, mut ...func(*config.Judge)) (*Judge, 
 		m(cfg)
 	}
 	dir := trace.Dir(t.TempDir())
-	return &Judge{Cfg: cfg, Client: &llm.Client{HTTP: s.Client()}, Dir: dir}, dir
+	return &Judge{Cfg: cfg, Client: Live{Client: &llm.Client{HTTP: s.Client()}}, Dir: dir}, dir
 }
 
 func input(ids ...string) Input {

@@ -204,6 +204,17 @@ which is what a calibration needs:
 cmoa judge --task <chat task> --candidate c1.txt --candidate c2.txt --candidate c3.txt --seed 7
 ```
 
+`cmoa judge --replay-from <run dir>` re-aggregates a run that has already
+been made: it reads the recorded answer of every call back out of the trace
+and asks no server anything. The judge's answers are data; consensus, the
+Copeland score and the tie-break chain are a function of them, so a change
+to that function can be measured against a corpus that already exists
+rather than by spending the fleet again. The new run records
+`candidates_origin: "replay"` and a `replayed_from` block naming the source
+and the digest of every file it read, so a re-aggregation is never mistaken
+for a measurement, and it refuses outright when the source was judged at a
+different `prompt_version`.
+
 `--seed` changes only the nonce; `--judge-seed` changes the judge's own
 sampling seed. Both `select` and `judge` print one JSON object on the chat
 face and exit 0 whatever the outcome, and both refuse a run that has

@@ -199,7 +199,7 @@ func verifyDiff(ctx context.Context, t *task.Task, rev, diff, label string, to t
 	if out.TimedOut {
 		res.Status = trace.VerifyTimeout
 	} else {
-		judge(t.Verify.Kind, res, out.Stdout)
+		verdict(t.Verify.Kind, res, out.Stdout)
 	}
 	logf("%s: %s (exit %d, %s)", label, res.Status, out.ExitCode, out.Duration.Round(time.Millisecond))
 	if res.Band != nil {
@@ -208,13 +208,13 @@ func verifyDiff(ctx context.Context, t *task.Task, rev, diff, label string, to t
 	return res, out.Stdout, out.Stderr
 }
 
-// judge reads the verifier's answer in the vocabulary of its kind and sets
+// verdict reads the verifier's answer in the vocabulary of its kind and sets
 // res.Status. An exit-code verifier answers with its exit status. A band
 // verifier answers with the gate CSV it printed: any invariant outside its
 // band is this candidate's `fail`, while a container that exited non-zero
 // with every band held is a broken harness — a `runner_error`, which says
 // nothing about the code under test (ADR-0005's distinction).
-func judge(kind task.VerifyKind, res *trace.VerifyResult, stdout []byte) {
+func verdict(kind task.VerifyKind, res *trace.VerifyResult, stdout []byte) {
 	switch kind {
 	case task.KindExitCode:
 		if res.ExitCode == 0 {

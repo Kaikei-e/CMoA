@@ -25,8 +25,10 @@ const RuleConsensusThenCopeland = "consensus-then-copeland"
 
 // ChatOptions tune a chat-face selection.
 type ChatOptions struct {
-	// Client sends the judge's requests; nil means a default client.
-	Client *llm.Client
+	// Client answers the judge's calls; nil means a live client. A
+	// judge.Replayer here re-aggregates a run that was already made,
+	// without asking any server anything.
+	Client judge.Completer
 	// Seed overrides the presentation permutation and the nonce, never the
 	// judge's own sampling seed.
 	Seed *int64
@@ -101,7 +103,7 @@ func RunChat(ctx context.Context, cfg *config.Config, t *task.Task, dir trace.Di
 
 	client := opt.Client
 	if client == nil {
-		client = &llm.Client{HTTP: &http.Client{}}
+		client = judge.Live{Client: &llm.Client{HTTP: &http.Client{}}}
 	}
 	j := &judge.Judge{Cfg: cfg.Judge, Client: client, Dir: dir, Now: now, Log: logf}
 	rep, err := j.Run(ctx, judge.Input{

@@ -154,3 +154,55 @@ func TestUsageMentionsBothFaces(t *testing.T) {
 		}
 	}
 }
+
+// The refusals --replay-from makes before it reads anything back. Each is a
+// way of asking a different question than the one the record answers, and
+// answering it with recorded bytes would produce a trace that looks like a
+// measurement and is not one.
+func TestJudgeReplayRefusals(t *testing.T) {
+	dir := t.TempDir()
+	write := func(path, body string) {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(dir, "task.json"), `{"version":3,"id":"c","face":"chat"}`)
+	write(filepath.Join(dir, "conversation.json"), `[{"role":"user","content":"why?"}]`)
+	write(filepath.Join(dir, "cmoa.json"), `{"version":2,
+	  "proposers":[{"id":"p","base_url":"http://127.0.0.1:1","model":"m"}],
+	  "harness":{"vault":"`+dir+`"},
+	  "judge":{"base_url":"http://127.0.0.1:1","model":"j"}}`)
+	write(filepath.Join(dir, "cand.txt"), "an answer\n")
+	src := filepath.Join(trace.RunsRoot(dir), "20260905T120000Z-abcdef01")
+	write(filepath.Join(src, "run.json"),
+		`{"schema_version":1,"run_id":"20260905T120000Z-abcdef01","face":"chat","task":{"id":"c"},
+		  "proposers":[{"id":"c1"}]}`)
+	write(filepath.Join(src, "judge.json"),
+		`{"schema_version":1,"run_id":"20260905T120000Z-abcdef01",
+		  "judge":{"model":"j","prompt_version":"0000000000000000"},"outcome":{"kind":"no_candidate"}}`)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		code int
+		want string
+	}{
+		{"candidates too", []string{"--candidate", filepath.Join(dir, "cand.txt")}, exitUsage, "--candidate"},
+		{"a seed too", []string{"--seed", "3"}, exitUsage, "--seed"},
+		{"another prompt", nil, exitInvalid, "another question"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			args := append([]string{"judge", "--task", dir, "--replay-from", src}, tc.args...)
+			if code := run(args, &out, &errb); code != tc.code {
+				t.Fatalf("exit %d, want %d: %s", code, tc.code, errb.String())
+			}
+			if !strings.Contains(errb.String(), tc.want) {
+				t.Errorf("want %q in\n%s", tc.want, errb.String())
+			}
+		})
+	}
+}

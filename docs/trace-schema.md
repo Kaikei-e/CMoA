@@ -39,8 +39,9 @@ largest directory is the latest run. Every JSON file is written atomically.
 | `face` | `coding` or `chat`; a run written before the field existed has none, and is a coding run |
 | `task` | `id`, `dir`, `repo`, `rev` (as written), `resolved_rev` (commit SHA), `files`, `instruction_sha256`. On the chat face `repo`, `rev`, `resolved_rev` and `files` are empty: nothing is checked out |
 | `conversation_sha256` | chat face: the digest of the conversation as CMoA parsed it |
-| `candidates_origin` | chat face: `proposers`, or `external` when `cmoa judge` was handed the answers |
-| `external_candidates` | chat face, `external` only: `id`, `file` and `sha256` per answer, so a caller can pin what was judged |
+| `candidates_origin` | chat face: `proposers`, `external` when `cmoa judge` was handed the answers, or `replay` when it read them back out of an earlier run |
+| `external_candidates` | chat face, `external` and `replay` only: `id`, `file` and `sha256` per answer, so a caller can pin what was judged |
+| `replayed_from` | chat face, `replay` only: the source `run_id`, its `dir`, its `prompt_version`, the `judge_sha256` of its `judge.json` and the `sha256` of every call file replayed. Present on a replay and absent on every other run, so a re-aggregation can never be read as a measurement |
 | `config` | the effective `cmoa.json` after defaults; holds `api_key_env` names, never key values |
 | `harness` | `vault`, `as_of` (valid time, YYYY-MM-DD), `at` (vault commit, `-dirty` suffix when the tree had changes), `docdag_version`, `binding` (id/title/status/path of each binding document), `render` (the rendered harness directory, absent when the run was given none) |
 | `proposers` | `id`, `model`, `base_url` per proposer, in configured order |
@@ -671,6 +672,25 @@ proposer call. The candidates are `c1..cN` in the order the flags were
 given; `run.json` records `candidates_origin: "external"` and each file's
 digest. `--seed` changes the nonce and nothing else, never the judge's
 sampling seed — `--judge-seed` does that.
+
+`cmoa judge --task <chat task> --replay-from <run dir>` re-aggregates a run
+that was already made. It reads the source's candidates and answers each of
+the six calls with the attempt the source recorded at the same position —
+the same request, the same response — and asks no server anything. What it
+re-runs is the rule: the consensus stage, the Copeland score and the
+tie-break chain are a pure function of the answers, so a rule that changed
+can be measured against traces that cost a fleet an afternoon. It refuses
+when the source was judged at another `prompt_version`, when it judged
+another task, when `--candidate`, `--seed` or `--judge-seed` is given
+beside it (each asks a different question than the record answers), and
+when it is asked for a call or an attempt the record does not hold. The new
+run is written elsewhere and the source is never touched; the judge
+parameters come from the source too, so `judge.json` describes the calls
+that were actually replayed. Because the trace stores each request and
+response decoded, the bytes are restored — indentation, the `<`, `>` and
+`&` the encoder escapes, a trailing newline — until the digest the record
+already carries matches, which is how a reader checks that a replay
+answered the question it claims to have answered.
 
 Both `select` and `judge` refuse a run that already has `judge.json` or
 `select.json` **before** making a call, so an interrupted attempt cannot be
