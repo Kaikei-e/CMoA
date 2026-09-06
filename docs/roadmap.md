@@ -13,7 +13,7 @@ are not.
 | 4 | **CMoA** | **v0, coding face: `propose` and `select`, verifier-selected, no judge** | shipped (this repository) |
 | 5 | uzushio | `run` and `improve`: held-in and held-out splits, sequential testing, edits accepted only when both pass. CMoA contributes `propose --harness`, `--seed` and `--temperature` ([ADR 0010](adr/0010-harness-directory.md)) | shipped ([uzushio#6](https://github.com/Kaikei-e/uzushio/pull/6), 2026-09-05) |
 | 6 | uzushio | the first task manifest carries the constraints learned from the previous project: one milestone per session, a ceiling on test lines per product line, dogfooding kept off the critical path | shipped ([uzushio#6](https://github.com/Kaikei-e/uzushio/pull/6), clauses UZ-C-006 to UZ-C-008, 2026-09-05) |
-| 7 | CMoA | chat face: a single blind judge on a separate accelerator, randomised and position-swapped presentation, calibration log | in progress |
+| 7 | CMoA | chat face: a single blind judge of a different model family, position-swapped pairwise presentation with a seeded nonce, `cmoa judge` and `cmoa serve` ([ADR 0011](adr/0011-chat-face-blind-pairwise-judge-and-serve.md)); uzushio's calibration log (three kappas with named tie handling, expiring `calibration` documents) | shipped ([CMoA#7](https://github.com/Kaikei-e/CMoA/pull/7), [uzushio#7](https://github.com/Kaikei-e/uzushio/pull/7), 2026-09-06; first calibration verdict: uncalibrated) |
 
 ## What v1 does not do
 
