@@ -1,316 +1,213 @@
 # CMoA
 
-**Common Mixture-of-Agents.** A general-purpose Mixture-of-Agents runtime
-for both chat and coding, built on what the 2025–2026 evidence on MoA
-supports: heterogeneous proposers, a single judge, selection rather than
-synthesis.
+**Common Mixture-of-Agents** is a Go runtime that asks a configured pool of
+models for candidates and selects one. It supports chat and coding, preserves
+how each decision was made, and never merges candidates or writes a replacement
+answer.
 
-CMoA is the middle of a three-layer stack:
-
-| Layer | Project | What it guarantees |
+| Face | Candidates | Selection |
 | --- | --- | --- |
-| Ground | [DocDag](https://github.com/Kaikei-e/DocDag) | Markdown + YAML frontmatter read as a typed graph; declared relations are consistent |
-| Frame | **CMoA** | The runtime below: routing, aggregation, traces, and the surfaces a harness may edit |
-| Fit-out | [uzushio](https://github.com/Kaikei-e/uzushio) | The specification, the conformance tests, and the lineage of harness edits |
+| Coding | Unified diffs | Apply each diff in its own Git worktree, run the task's Docker verifier, select the first passing candidate in configured order |
+| Chat | Conversation replies | Select by consensus first; otherwise compare answers with one blind, pairwise judge |
 
-CMoA depends on DocDag through read-only commands only. It does not depend
-on uzushio; uzushio depends on it.
+CMoA uses [DocDag](https://github.com/Kaikei-e/DocDag) through read-only commands
+to record the specification a run read. [uzushio](https://github.com/Kaikei-e/uzushio)
+builds evaluation and harness-improvement workflows on CMoA; CMoA does not depend
+on it. See the [roadmap](docs/roadmap.md) for scope and status.
 
-## Status
+## Build and configure
 
-**Two faces.** On the **coding face** `cmoa propose` asks every configured
-proposer for a unified diff, and `cmoa select` applies each diff to its own
-git worktree, runs the task's verifier in a container, and selects the first
-candidate in configured order that passes. `cmoa verify` runs that same
-verification for one diff named on the command line, so the verifier itself
-can be measured.
+The Go runtime uses only the standard library. Building requires Go 1.27.1 or
+later; runs need Git, DocDag, and running OpenAI-compatible model endpoints.
+Coding verification also needs Docker Compose. The optional monitor has its own
+Node/SvelteKit dependencies.
 
-On the **chat face** `cmoa propose` sends the task's conversation to the
-same pool and keeps each answer, and `cmoa select` puts the answers to a
-single judge model, pairwise and in both orders. `cmoa judge` runs that
-protocol over answers produced somewhere else, and `cmoa serve` puts the
-whole face behind an OpenAI-compatible endpoint on loopback.
-
-There is still no dependency outside the Go standard library. What comes
-next, and in what order, is in [docs/roadmap.md](docs/roadmap.md).
-
-A round can be watched while it runs. **CMoA Monitor** under
-[`monitor/`](monitor/) is a separate SvelteKit process that reads the run
-traces and each server's `/slots` and shows one round on one screen. Its
-chat panel relays a conversation to `cmoa serve`, which runs the round and
-writes the trace; the monitor itself writes nothing
-([ADR 0012](docs/adr/0012-monitor-observes-traces-and-servers.md)).
+From the repository root:
 
 ```sh
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.4.1
+export PATH="$(go env GOPATH)/bin:$PATH"
 go build -o bin/cmoa ./cmd/cmoa
-cd examples/task-hello && ./setup.sh
-cmoa propose --task . --config /path/to/cmoa.json     # writes runs/<run-id>/
-cmoa propose --task . --harness ./render --seed 7 --temperature 0
-cmoa select  --task .                                  # verifies, writes select.json
-cmoa verify  --task . --diff reference.diff            # one diff, one JSON object
-cmoa surfaces                                          # the editable surfaces
 ```
+
+To install CMoA on your PATH instead, use
+`go install github.com/Kaikei-e/CMoA/cmd/cmoa@latest`.
+
+Create `cmoa.json`, replacing the model names, endpoints and vault path with
+your own. The vault must be an existing Git-backed DocDag vault; CMoA does not
+start model servers.
+
+```json
+{
+  "version": 2,
+  "proposers": [
+    {"id": "p1", "base_url": "http://127.0.0.1:8081/v1", "model": "model-a"},
+    {"id": "p2", "base_url": "http://127.0.0.1:8082/v1", "model": "model-b"},
+    {"id": "p3", "base_url": "http://127.0.0.1:8083/v1", "model": "model-c"}
+  ],
+  "harness": {"vault": "/path/to/docdag-vault"},
+  "judge": {"base_url": "http://127.0.0.1:8090/v1", "model": "judge-model"},
+  "serve": {"listen": "127.0.0.1:8095", "pool_name": "cmoa", "runs_dir": "serve-runs"}
+}
+```
+
+Configuration is discovered through `--config`, then `$CMOA_CONFIG`, then
+`<task>/cmoa.json`, then `./cmoa.json`. Relative vault and serve paths resolve
+against the configuration file. Version 1 supports coding; version 2 adds the
+optional `judge` and `serve` blocks. Chat requires a judge, including when
+proposing candidates.
+
+Defaults cover sampling, token limits, timeouts and concurrency. Endpoints can
+use `api_key_env` for credentials and `extra_body` for additional request fields.
+The judge defaults to `output_format: "json_schema"`; use `"none"` if your
+endpoint does not support it. See the [configuration types](internal/config/config.go)
+and [validation/defaults](internal/config/validation.go) for the full contract.
+
+## Run a task
+
+These examples use the binary built above and run from the repository root:
 
 ```sh
-cd examples/task-chat-hello
-cmoa propose --task . --config /path/to/cmoa.json     # every proposer answers the conversation
-cmoa select  --task .                                  # asks the judge, writes judge.json
-cmoa judge   --task . --candidate a.txt --candidate b.txt --candidate c.txt
-cmoa serve   --config /path/to/cmoa.json               # POST /v1/chat/completions
+export CMOA_CONFIG="$PWD/cmoa.json"
+
+# Coding: setup recreates the example's generated repository.
+sh examples/task-hello/setup.sh
+./bin/cmoa propose --task examples/task-hello
+./bin/cmoa select --task examples/task-hello
+./bin/cmoa verify --task examples/task-hello --diff examples/task-hello/reference.diff
+
+# Chat: generate answers, then select from the latest run.
+./bin/cmoa propose --task examples/task-chat-hello
+./bin/cmoa select --task examples/task-chat-hello
+
+# Judge existing answer files, or re-aggregate a recorded run without model calls.
+./bin/cmoa judge --task examples/task-chat-hello --candidate a.txt --candidate b.txt
+./bin/cmoa judge --task examples/task-chat-hello --replay-from /path/to/run
+
+./bin/cmoa surfaces --format json
+./bin/cmoa --help
 ```
 
-`cmoa.json` names the proposers (any OpenAI-compatible `/v1/chat/completions`
-endpoint, such as `llama-server`), the DocDag vault the run reads, and the
-verifier's parallelism and timeout. A task is a directory holding
-`task.json`, `instruction.md` and a `compose.yaml` with a `verify` service;
-see `examples/task-hello`. `task.json` version 2 adds the task's own
-reference solution and a set of mutants, so a layer above can ask how good
-the verifier is; version 1 files keep their meaning. The reference diff may
-be an empty file, which says the tree at `rev` already is the reference
-solution. Version 2 also chooses how the verifier answers: `verify.kind:
-exit-code` (the default) reads the container's exit status, while `band`
-reads a CSV of measured invariants and their bands off its stdout, so a
-performance gate can say *which* invariant moved. `cmoa verify` judges both
-kinds; `cmoa select` judges exit-code verifiers only. What a run leaves
-behind, and the band CSV's contract, are in
-[docs/trace-schema.md](docs/trace-schema.md).
+`propose` prints the new run directory. `select --run <dir>` selects a specific
+run; omitting `--run` uses the latest under the task. Coding selection prints a
+text result; chat selection prints JSON. `judge` prints the JSON outcome on its
+first line and the new run directory on the next. Both selection commands exit
+0 for a recorded outcome, so inspect `kind` to determine whether anything was
+selected. `verify` emits JSON. Each command supports `--help`.
 
-`--harness <dir>` names a *rendered harness directory* — the tree a layer
-above materialises from the harness edits that are in force. CMoA reads
-three things out of it: `system-prompt.md` is appended to its own output
-contract (never replacing it), `memory/**/*.md` become a `## Notes` section
-in path order, and each `skills/<name>/SKILL.md` contributes one
-`- <name>: <description>` line. Skill bodies are not rendered; CMoA has no
-step that would load one. On the chat face all three reach the single
-system message, because the rest of the prompt is the task's conversation
-and CMoA does not edit a turn. The directory is per run, so it is a flag
-and not a `cmoa.json` field, and an empty one renders the prompt a run
-without it renders, byte for byte. CMoA hashes the tree itself and records every file
-and the digest in `run.json` as `harness.render`, so what a renderer says
-it wrote and what CMoA read can be compared.
+| Exit | General CLI | `verify` |
+| --- | --- | --- |
+| 0 | Command completed; inspect the selection outcome | Pass |
+| 1 | Runtime error | Fail, apply failure or timeout |
+| 2 | Usage error | Usage, task or config error |
+| 3 | Config or task validation error | Verifier could not run |
 
-The harness is counted against the task's own `max_context_bytes`: a note
-is as much of the model's context as a file is, so a tree that does not fit
-refuses the run (exit 3) instead of overrunning the server's context and
-being scored as a regression. A harness that would make an edit measure as
-a no-op for the wrong reason is refused too — a skill directory with no
-`SKILL.md`, a skill with no description, a name outside
-`^[a-z0-9][a-z0-9._-]{0,63}$`, a file that is not valid UTF-8 or not a
-regular file. `--harness ""` is an error, not "no harness".
+Task formats remain backward compatible:
 
-`--seed <int>` and `--temperature <float>` override *every* proposer's seed
-and temperature for one run, and the effective config in `run.json` records
-the values that were sent. They are independent flags, so pairing them is
-the caller's job: a repeated measurement wants both — `--seed <n>
---temperature 0` — because a seed alone still samples.
+| `task.json` version | Contents |
+| --- | --- |
+| 1 | Coding: repository/revision, input files, `instruction.md`, and a Compose verifier |
+| 2 | Adds reference diffs, mutants, doctor settings, and verifier kind/timeout |
+| 3 | Explicit `face`: coding retains v2 fields; chat uses a conversation ending in a user message, with optional reference answer and rubric shown only to the judge |
 
-## The chat face
+`verify` supports exit-code and band-CSV verifiers; coding `select` supports
+exit-code verifiers only. An empty reference diff verifies the revision unchanged.
+CMoA verifies individual diffs; mutant generation and verifier-quality evaluation
+belong to the layer above. Start with the [coding example](examples/task-hello/README.md)
+or [chat example](examples/task-chat-hello/README.md).
 
-`task.json` version 3 adds a `face`. A version 3 coding task carries exactly
-the version 2 fields; a chat task carries a `conversation.json` instead of a
-repository — a JSON array of `{role, content}` ending with a `user` message
-— and, optionally, a `reference.answer` and a `rubric`. Those last two are
-shown to the **judge only**: a proposer handed the reference answer is not
-answering the question. `cmoa.json` version 2 adds a `judge` block naming
-the judge endpoint, and a `serve` block; version 1 files keep their meaning
-and mean "no judge, no serve". See `examples/task-chat-hello`.
+## Selection and reproducibility
 
-Selection on the chat face is **consensus first, then a Copeland score**.
+Chat selection first checks for a strict majority of agreeing, normalised
+answers. Agreement selects a candidate without calling the judge. Otherwise,
+every pair is compared in both orders: three candidates require six calls.
+A win scores 1, a measured draw scores 0.5 per side, and a loss scores 0.
+Ties are resolved by agreement, meaningful length differences, then text hashes;
+byte-identical answers use the lowest candidate id. Malformed output, timeouts
+and endpoint failures are tracked separately from measured draws. Malformed
+judge output gets one retry.
 
-The candidates are compared with each other before the judge is asked at
-all. Each answer is normalised — full-width forms folded to ASCII, lower
-case, `*` and backticks stripped, every list marker that starts an item
-stripped, whitespace collapsed, trailing punctuation trimmed. The
-underscore stays, because `user_id` and `userid` are different answers. Two
-answers agree when the normalised texts are equal, or when both are short,
-both hold a number, their last numbers match, **and both either deny
-something or neither does** — `3つあります` and `3つではありません` are not
-the same answer, and without that guard they were one, at zero judge calls.
-A `,` or `、` is a thousands separator only in the shape one has, since
-`、` is also the ordinary Japanese comma; an exponent is one token kept
-verbatim. If a strict majority agree, one of them is returned and **no
-judge call is made**. Three proposers answering `101` to `1 + 100` is not a
-failure to decide; it is the strongest evidence the round has.
+Candidates are labelled A/B, sanitised and fenced; injection-shaped text is
+flagged in the trace. The [selection decision](docs/adr/0013-consensus-then-copeland-for-chat-selection.md)
+and [trace schema](docs/trace-schema.md) describe the detailed rules and outcomes.
 
-When they disagree, the judge runs **round-robin pairwise with an order
-swap**: three pairs, each asked in both orders, six calls. A pair is won
-only when both orders name the same candidate; a disagreement, or a `tie`
-in either order, is a draw — and a draw now **counts**. A win scores 1, a
-draw the judge answered scores 0.5 to each side, a loss 0. That is the swap
-protocol's own reading of an inconsistent pair, and the way an arena folds
-a tie into a Bradley-Terry fit. A Condorcet winner is still reported as
-one; otherwise the highest score is selected.
+- `propose --seed 7 --temperature 0` overrides every proposer's sampling settings.
+- `judge --seed 7` controls the candidate-fence nonce; `--judge-seed` controls the
+  judge's sampling seed. Neither shuffles the pairwise presentation.
+- `judge --replay-from` reuses recorded candidates, seeds and answers in a new run,
+  recording source digests. It requires a matching task and prompt version and
+  cannot be combined with `--candidate`, `--seed` or `--judge-seed`.
+- Completed selections are written once. Each run records effective settings,
+  prompts, responses, candidates, timings, and the harness revision/date.
 
-A draw nobody could measure — an unparsable answer, a timeout, a call that
-could not be sent — scores nothing, because a machine failure is not a
-judgment. Those still escalate: `invalid_output` is `no_candidate`, and an
-unanswered pair that could still take a candidate to the top score is
-`judge_timeout` or `judge_failed` — the question is asked in the currency
-the outcome is decided in, so half a point is enough to matter. So `no_candidate` is the residual case only —
-`too_few_candidates` and `invalid_output`. `cycle`, `no_majority` and
-`all_draws` stay in the vocabulary because older traces carry them, and are
-no longer produced.
+## Harnesses and traces
 
-What the score cannot part is settled by keys in order, and the one that
-fired is recorded in `judge.json` as `tie_break`: agreement with the rest
-of the run (`consensus`), then the shorter normalised answer *only* where
-the longest is at least 1.5× the shortest (`length`, which also drops an
-answer that normalises to nothing), then the lowest SHA-256 of the
-normalised text and, if those match, of the raw text (`hash`). Candidates
-that wrote the same answer to the byte are recorded as `identical` and the
-lowest id is returned, rather than claiming a hash decided. **No key reads
-the presentation position, the listed order or the proposer.** Those are
-the biases the swap exists to detect, and they are strongest exactly in the
-tie region. The hash is arbitrary, but it is arbitrary about the answer:
-the same answers give the same winner in every run, on every machine, and
-the tied set is written down in ascending id order whatever order the run
-presented it in.
+`propose`, `judge` and `serve` accept `--harness <dir>` for a rendered harness:
+`system-prompt.md` extends CMoA's output contract, `memory/**/*.md` supplies notes
+in path order, and `skills/<name>/SKILL.md` supplies names and descriptions.
+Skill bodies are not executed or loaded into prompts. Harness input is validated,
+its tree digest is recorded, and proposer context budgets include its content.
+An empty directory is equivalent to no harness; `--harness ""` is an error.
+See the [harness contract](docs/adr/0010-harness-directory.md).
 
-Every pair still records **why** it drew — `tie`, `disagree`, `invalid` or
-`unmeasured`, counted in `judge.json` as `draw_reasons` — and that word now
-decides whether the draw scored at all. Three different findings about a
-judge reported under one word is the conflation an agreement metric must
-not make, so the split is kept where a calibration can read it.
+`cmoa surfaces` lists editable harness components and their autonomy; the verifier,
+tracer and model configuration remain read-only. CMoA declares these boundaries;
+it does not edit itself.
 
-A pair nobody could answer does not throw away a winner it could not have
-unseated: if a candidate leads and no missing answer can catch it, a
-timeout in the pair between two losers leaves the selection standing and is
-recorded as `unmeasured`. Only when a candidate other than the sole leader
-could still reach the top score does it become `judge_timeout` or
-`judge_failed`.
+Runs live under `<task>/runs/<run-id>/`. `run.json` records provenance,
+`prompt/` and `candidates/` record generation, `verify/` or `judge/` record
+assessment, and `select.json` records the outcome. Chat also writes `judge.json`.
+See the [trace schema](docs/trace-schema.md) for file layouts, statuses and band CSV.
 
-The judge is asked blind. The candidates are labelled `A` and `B` inside a
-call and mapped back only in the trace. Candidate text is fenced with a
-nonce; invisible characters (C0 controls, zero-width runes) are dropped
-first and anything still resembling the closing tag is escaped after, so a
-control character hidden inside the tag cannot survive the escape and then
-be tidied into a working one. Injection-shaped phrases are flagged —
-**recorded, never acted on**: silently dropping a flagged candidate would be
-a second, unmeasured judge. Everything the judge saw is on disk, in
-`judge/<pair>-<ab|ba>.json` and `judge.json`.
-
-There is no presentation permutation: both orders of every pair are always
-asked, so shuffling the candidates cannot change one byte the judge reads.
-The nonce is what a re-run varies, and it is derived from a seed — `--seed`,
-or the run id — rather than drawn afresh. That makes `--seed` a real
-perturbation of the prompt, the same question in different irrelevant bytes
-whose answer ought not to change, and it makes a selection reproducible from
-its own trace.
-
-`cmoa judge` performs the same protocol over answers CMoA did not produce,
-which is what a calibration needs:
+## Serve and monitor
 
 ```sh
-cmoa judge --task <chat task> --candidate c1.txt --candidate c2.txt --candidate c3.txt --seed 7
+./bin/cmoa serve --config "$CMOA_CONFIG"
+# From another terminal:
+curl http://127.0.0.1:8095/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"cmoa","messages":[{"role":"user","content":"What is 2 + 2?"}]}'
 ```
 
-`cmoa judge --replay-from <run dir>` re-aggregates a run that has already
-been made: it reads the recorded answer of every call back out of the trace
-and asks no server anything. The judge's answers are data; consensus, the
-Copeland score and the tie-break chain are a function of them, so a change
-to that function can be measured against a corpus that already exists
-rather than by spending the fleet again. The new run records
-`candidates_origin: "replay"` and a `replayed_from` block naming the source
-and the digest of every file it read, so a re-aggregation is never mistaken
-for a measurement, and it refuses outright when the source was judged at a
-different `prompt_version`.
+The chat-only server exposes `GET /v1/models` and `POST /v1/chat/completions`.
+Successful responses include a `cmoa` field with selection metadata and a run id;
+accepted requests leave traces under `serve.runs_dir`. `stream: true` returns one
+SSE chunk after selection, followed by `[DONE]`. No candidate or a failed judge
+returns 502; a judge timeout returns 504. It binds loopback by default, has no
+authentication or TLS, and requires `--allow-remote` to bind elsewhere.
 
-`--seed` changes only the nonce; `--judge-seed` changes the judge's own
-sampling seed. Both `select` and `judge` print one JSON object on the chat
-face and exit 0 whatever the outcome, and both refuse a run that has
-already been judged *before* making a call, so an interrupted attempt
-cannot be made to spend the fleet twice.
+[CMoA Monitor](monitor/README.md) is a separate SvelteKit UI for fleet health,
+run history, candidate/judge inspection and a chat panel. It reads traces and
+server metrics; its chat panel forwards requests to `cmoa serve`.
 
-`cmoa serve` answers `GET /v1/models` and `POST /v1/chat/completions`. Every
-request becomes a task directory and a full run trace under `serve.runs_dir`,
-so an answer served over HTTP is as reconstructible as one produced by the
-CLI. A 200 carries a `cmoa` extension field with the run id, the selection
-and its Copeland score, the consensus and tie-break that settled it, the
-judge's call count and swap consistency, and the harness digest — all as
-counts and keys, never as candidate ids, so the id of the proposer whose
-answer won stays in the trace. A consensus answers with `calls: 0`. A
-selection that did not happen is an error, not a 200 with an apology:
-`no_candidate` is 502 with the sub-reason as `error.code`, a judge that
-could not be asked is 502, and one that ran out of time is 504. A tied
-ranking is no longer one of these. `stream:
-true` returns the wire format as a single chunk; the judge cannot compare
-answers that do not exist yet, so there is nothing to stream. The server
-binds loopback and has no auth, so a non-loopback address needs
-`--allow-remote`.
+## Development
 
-## Scope
-
-CMoA owns exactly four things. Anything else belongs to a layer above or
-below it.
-
-1. **A deterministic router and proposer pool.** Which proposers run is
-   decided by configuration, never by asking a model.
-2. **Selection-type aggregation.** On the coding face a candidate is
-   selected by passing the verifier; on the chat face by agreement among
-   the candidates, and where they disagree by a single judge, pairwise and
-   in both orders. Candidates are never merged into one answer, and the
-   judge never writes an answer of its own.
-3. **Traces as files.** Every run writes its candidates, the reason for the
-   selection, the models and resources used, and the `as_of` day and `at`
-   revision of the specification it read, so the run can be reconstructed
-   later with `docdag --as-of <day> --at <rev> query --binding`.
-4. **A declaration of editable surfaces.** Of the harness components a
-   self-improvement loop may touch (system prompt, tool descriptions,
-   skills, middleware, sub-agent config, memory), which are open. The
-   verifier, the tracer and the model configuration are read-only.
-
-## Decision records
-
-Records are Markdown with YAML frontmatter under `docs/adr/`
-(`NNNN-kebab-title.md`). Typed edges — `supersedes`, `depends-on` — are
-declared in frontmatter. Body wikilinks such as `[[0001]]` must name a real
-record.
+Code is organised by responsibility: CLI commands in `cmd/cmoa/`; configuration
+and task loading in `internal/config/` and `internal/task/`; generation in
+`internal/propose/`; selection in `internal/selection/` and `internal/judge/`;
+HTTP in `internal/serve/`; record types and persistence in `internal/trace/`.
+Coding verification uses `internal/patch/`, `internal/worktree/` and
+`internal/verify/`. Prompt and harness rendering have their own packages.
 
 ```sh
-# next free identifier, official template
-docdag new "Title of the decision"
+make build test vet
+make lint                       # requires golangci-lint
+make docdag                     # requires docdag
 
-# replace an existing record (rewrites its status in the same pass)
-docdag new "Replacement title" --supersedes 0001
+# Live E2E: fresh run with a v2 config, proposer fleet, judge, DocDag and Docker.
+CMOA_E2E=1 CMOA_CONFIG=/path/to/cmoa.json \
+  go test -count=1 -timeout=30m -run '^TestE2E' -v ./...
 ```
 
-Ask the graph instead of reading the directory:
+Unit tests use local fixtures and fakes; no live models, Docker or DocDag are
+required. Live E2E covers coding propose/select, reference and mutant verification,
+and chat propose/select/judge. Monitor checks are documented in its own README.
 
-```sh
-docdag query --binding                          # what is in force
-docdag resolve 0001                             # what replaced this
-docdag context 0001                             # the record and its neighbourhood
-docdag validate                                 # invariants; exits 1 on error
-docdag validate --touching docs/adr/0001-*.md   # findings one edit can break
-docdag lint                                     # the rules in docdag.yaml
-```
-
-## Install
-
-```sh
-go install github.com/Kaikei-e/CMoA/cmd/cmoa@latest
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.4.1   # propose reads the vault through it
-```
-
-CMoA needs Go 1.27 and git at runtime, and Docker Compose for the coding
-face (`select` runs `docker compose run`); the chat face runs no container.
-`make test` runs the unit tests without a model, Docker or DocDag;
-`CMOA_E2E=1 CMOA_CONFIG=... make e2e` runs `examples/task-hello` and
-`examples/task-chat-hello` against a live fleet.
-
-`docdag.yaml` pins the
-`adr` preset and the corpus directory; CI downloads the v0.4.1 release
-binary via `Kaikei-e/DocDag@v0.4.1`. Locally, `pre-commit install` runs the
-same checks on Markdown and `docdag.yaml` edits; the hook builds `docdag`
-from source and needs a Go toolchain.
-
-## Contributing
-
-Issues and pull requests are welcome. A decision is changed by superseding
-it, not by editing it: add a new record with `--supersedes`, and let
-`docdag validate` confirm the lineage before you open the pull request.
+Architecture decisions live in [docs/adr/](docs/adr/README.md). Query the active
+set with `docdag query --binding`. Change a decision by adding a new record with
+`docdag new "Title" --supersedes <id>`, then validate; accepted records preserve
+history. `pre-commit install` enables the DocDag documentation checks.
 
 ## License
 
-No license file has been added yet. Until one lands, the code and documents
-here are not yet licensed for reuse.
+No license file has been added; the code and documents are not yet licensed for reuse.
