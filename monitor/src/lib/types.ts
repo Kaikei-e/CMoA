@@ -114,7 +114,7 @@ export interface RunSummary {
 	dir: string;
 	face: Face;
 	createdAt: string | null;
-	/** Human-readable outcome, e.g. `selected gemma` or `no_candidate (no_majority)`. */
+	/** Human-readable outcome, e.g. `selected gemma` or `no_candidate (invalid_output)`. */
 	outcome: string;
 	outcomeState: string;
 	outcomeColour: Colour;

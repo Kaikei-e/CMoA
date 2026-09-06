@@ -267,11 +267,11 @@ are verified one diff at a time, by the layer above.
 
 | field | meaning |
 | --- | --- |
-| `rule` | `first` on the coding face, `judge-pairwise` on the chat face |
+| `rule` | `first` on the coding face, `consensus-then-copeland` on the chat face |
 | `order` | candidate ids in the order they were considered (configured order, or `c1..cN` for external candidates) |
 | `selection.kind` | `selected` (`candidate_id`, `reason`), `no_candidate` (`tried`, and on the chat face `reason`, the sub-reason below), `verifier_failed` (`error`), `judge_timeout` (`after_ms`), `judge_failed` (`error`, chat face) |
 | `also_passed` | coding face: other candidates that passed; every candidate is verified even after the first pass, so the layer above can measure how often proposers agree. Always `[]` on the chat face |
-| `ranked` | chat face: candidate ids by wins, ties broken by `order`. Informational — only `selection` decides |
+| `ranked` | chat face: candidate ids by Copeland score, ties broken by the chain `judge.json`'s `tie_break` names. Informational — only `selection` decides |
 | `max_parallel`, `finished_at` | `max_parallel` is `verify.max_parallel` on the coding face and `judge.parallel` on the chat face |
 
 ## the chat face
@@ -303,27 +303,102 @@ decoration?* — cannot be answered later from numbers nobody wrote down.
 
 ### the protocol
 
-Three candidates make three pairs; each pair is asked in both orders, so a
-selection is six calls. A pair is won only when **both orders name the same
-candidate**; a disagreement, or a `tie` in either order, is a draw and
-scores nothing for either side. A candidate that wins every pair it appears
-in is the Condorcet winner and is selected. Anything else is
-`no_candidate`, with a sub-reason:
+Selection is two stages: the candidates are compared with each other first,
+and the judge is asked only when they disagree.
+
+**Stage 1, consensus.** Every answer is normalised — the full-width ASCII
+block and the ideographic space folded to ASCII, lower case, the markdown
+emphasis markers `*` and `` ` `` removed, every list marker that starts an
+item removed, whitespace runs collapsed, trailing `.` `。` `!` `?` trimmed.
+The underscore is **not** removed: it is a word character, and dropping it
+would make `user_id` and `userid` the same answer. Markers are stripped
+wherever an item starts, not only at the head of a line, because a list
+written on one line — `1. りんご 2. みかん 3. ぶどう` — otherwise keeps a
+last number of 3 and agrees with any short answer ending in three. A marker
+is a marker only at a line start or after a space, and only when what
+follows it is neither a digit nor nothing: `101.` is an answer, `1.101` is
+one decimal number, `1. 答え` is an item.
+
+Two normalised answers **agree** when they are the same text, or when all
+of the following hold: both are at most 160 runes long, both contain a
+number, their last numbers are equal, **and both either deny something or
+neither does**. The last number is the answer, because a worked calculation
+states its operands first and its result last; the length bound keeps two
+essays that happen to share a figure from counting as agreement.
+
+Three rules keep "the last number" from being read too generously:
+
+- **A negation guard.** `3つあります` and `3つではありません` are both short
+  and both end in the same number. Without the guard they were the same
+  answer, at zero judge calls. A small list of negation forms is matched —
+  Japanese ones as substrings, English ones as whole words so `no` does not
+  fire inside `know` — and the two answers must agree about it. The list
+  will miss forms; a missed negation and a spurious one both cost an
+  agreement, so both directions of error fall back on asking the judge.
+- **A separator has a shape.** A `,` or `、` groups thousands only with a
+  digit before it and exactly three digits after it and no fourth, because
+  `、` is also the ordinary Japanese comma: `276,416` is one number, and
+  `候補は 1、2、3 です` is three.
+- **An exponent is one token, kept verbatim.** `1e5` is neither `5` nor
+  `100000`. The miss is safe; the false agreement would not be.
+
+Valueless zeros are dropped, so `276,416`, `276416` and `276416.0` are one
+number. Neither test reads the question or the reference answer.
+
+If a **strict majority** of the candidates mutually agree, one of them is
+selected — which one is the tie-break chain below — and **not one judge
+call is made**. `judge.json` records the finding in `consensus`, `pairs` is
+empty, and `wins` and `scores` are all zero. The reason reads
+`consensus: 2 of 3 agree on the normalised answer (numeric)`.
+
+The normalisation is hand-rolled, not a real Unicode NFKC: CMoA declares no
+dependencies and the standard library has no normaliser. It covers the
+forms a local model actually emits — the full-width ASCII block and the
+ideographic space — and half-width katakana, circled digits and the rest
+are not folded. It errs toward missing an agreement, never toward inventing
+one; a missed agreement only costs the six calls stage 2 would have made
+anyway. `consensus.normalisation` names the version (`nfkc-v1`) so a trace
+written under one normaliser is not silently compared with another.
+
+**Stage 2, the Copeland score.** Three candidates make three pairs; each
+pair is asked in both orders, so a selection is six calls. A pair is won
+only when **both orders name the same candidate**; a disagreement, or a
+`tie` in either order, is a draw. What changed is how a draw is counted: a
+win scores **1**, a draw the judge *answered* scores **0.5 to each side**,
+and a loss scores 0. That is the swap protocol's own reading — an
+inconsistent pair is a tie, not the absence of evidence — and it is how an
+arena folds a tie into a Bradley-Terry fit.
+
+A draw nobody could measure scores **nothing**: `invalid` (no parser could
+read the answer) and `unmeasured` (a timeout, or a call that could not be
+sent) are machine failures, not judgments, and paying half a win for one
+would let an unreachable judge decide.
+
+A candidate that wins every pair it appears in is still the Condorcet
+winner and is still reported as one, with its reason text unchanged.
+Otherwise the highest score is selected — `copeland winner, score 1 of 2
+(no condorcet winner)`. A machine failure outranks the score: an unanswered
+pair that could still take a candidate **to the top score** escalates to
+`judge_timeout` or `judge_failed` (see below), and a pair no parser could
+read is `invalid_output`.
+
+So `no_candidate` is now the residual case only:
 
 | sub-reason | when |
 | --- | --- |
-| `cycle` | every pair was decided and the wins run in a circle |
-| `no_majority` | some pair was decided, but nobody beat everybody |
-| `all_draws` | no pair was decided at all (two or more pairs) |
 | `invalid_output` | the judge never returned usable JSON for a call the outcome needed, retry included |
 | `too_few_candidates` | fewer than two answers to compare |
+| `cycle` | **historical.** Every pair was decided and the wins ran in a circle. Not produced since the score settles it |
+| `no_majority` | **historical.** Some pair was decided, but nobody beat everybody. Not produced since the score settles it |
+| `all_draws` | **historical.** No pair was decided at all. Not produced since the score settles it |
 
-**`all_draws` is a union**, and a deliberately coarse one: a judge that
-abstained on every pair, a judge that contradicted itself under swap on
-every pair, and a judge that was never reached all land in it. Those are
-three different findings about the judge, and reporting them under one word
-is precisely the conflation an agreement metric must not make — so the
-split lives one level down, in `pairs[].draw_reason`:
+The three historical words stay in the vocabulary because traces written
+before the score carry them, and a reader of an old run has to be able to
+look them up. Nothing writes them now.
+
+**Why a draw drew is still recorded**, and now it decides whether the draw
+scores at all — an answered draw is half a win each, an unanswerable one is
+zero. The split lives in `pairs[].draw_reason`:
 
 | `draw_reason` | when |
 | --- | --- |
@@ -337,23 +412,63 @@ counts the draws by that field, so the values sum to the number of draws
 and a calibration can report each treatment by name rather than folding
 them together.
 
-There is no re-ask beyond one retry for malformed JSON, and no
-deterministic fallback. "Take the first" or "take the shorter" would
-reinstate as a rule exactly the position and length biases the order swap
-exists to detect.
-
 A pair that was never answered — a timeout, or an endpoint that could not
-be reached — does **not** discard a winner it could not have unseated. If
-one candidate has already beaten every other, no answer to the pair between
-two losers can change that, and the outcome is `selected` with the failed
-pair recorded as `draw_reason: unmeasured`. The outcome becomes
-`judge_timeout` or `judge_failed` only when the missing answers could still
-decide it: when some candidate could still win every pair it appears in if
-each unanswered pair went its way. A timeout outranks a transport error,
-because a timeout is the one a caller retries.
+be reached — does **not** discard a winner it could not have unseated. If a
+candidate leads and no missing answer can catch it, the outcome is
+`selected` with the failed pair recorded as `draw_reason: unmeasured`.
+
+The question is asked in the currency the outcome is decided in. Under the
+score a missing answer does not have to produce a clean sweep to matter:
+half a point is enough to overtake a leader, or to join the tied set the
+chain then parts. So the outcome becomes `judge_timeout` or `judge_failed`
+when some candidate other than the sole top scorer **could still reach the
+top score** if each of its unanswered pairs went its way. The sole leader is
+not counted against itself — more points only confirm it, and any candidate
+that could catch it is checked on its own row. A timeout outranks a
+transport error, because a timeout is the one a caller retries.
 
 The candidates are called `A` and `B` inside a call; which candidate is
 which is only in the trace.
+
+### the tie-break
+
+Two candidates can end on the same score, and inside a consensus group
+every member says the same thing, so something has to choose. Three keys
+are tried in order; the first that narrows the set to one has decided, and
+the key it was is written to `judge.json` as `tie_break`:
+
+| key | what it prefers |
+| --- | --- |
+| `consensus` | the candidate whose normalised answer agrees with the most **others in the run** — losers included, because agreement with a loser is still agreement |
+| `length` | the uniquely shortest normalised answer, and **only** when the longest tied answer is at least 1.5× the shortest. It also covers the blank answer: one that normalises to nothing (`***`, `。。。`) is dropped from the tied set before any key runs, unless they all are, and the key recorded is `length` |
+| `hash` | the lowest SHA-256 of the normalised answer's UTF-8 bytes, falling to the digest of the **raw** answer when the normalised texts are equal |
+| `identical` | no key decided: the candidates wrote the same answer to the byte, and the lowest candidate id is returned |
+
+The 1.5 gate is a tunable constant, not a measured optimum. Below it the
+difference is phrasing, and letting a word of politeness pick the answer
+would be a length bias rather than a counter-lever to one.
+
+`identical` is honest bookkeeping rather than a key: it says that nothing
+about the answers could part them. A candidate id is a property of the
+configuration, not of a position — two candidates can be byte-identical and
+still not be a consensus group, because grouping needs a strict majority
+and two of four is not one.
+
+`tie_break.among` and the ids in the outcome's reason are written in
+**ascending id order**, which is the same list whatever order the run
+presented the candidates in.
+
+**No key reads the presentation position, the order the candidates were
+listed in, or the proposer that wrote the answer.** Those are the biases the
+order swap exists to detect, and they are strongest exactly in the tie
+region, so a positional fallback would be worst precisely where it fires.
+The hash is arbitrary, but it is arbitrary *about the answer*: the same
+answers give the same winner in every run on every machine, which neither a
+coin flip nor a nonce-derived hash would.
+
+There is still no re-ask beyond one retry for malformed JSON. Nothing is
+asked twice, and the judge is never asked to choose again with `tie`
+removed.
 
 ### the presentation seed and the nonce
 
@@ -410,6 +525,7 @@ unpredictability.
     {"pair": ["p2", "p3"], "orders": [ … ], "verdict": "draw", "draw_reason": "tie"}
   ],
   "wins": {"p1": 2, "p2": 0, "p3": 1},
+  "scores": {"p1": 2.5, "p2": 0.5, "p3": 1},
   "outcome": {"kind": "selected", "candidate_id": "p1", "reason": "condorcet winner, 2 of 3 pairs agreed under both orders"},
   "ranked": ["p1", "p3", "p2"],
   "draw_reasons": {"tie": 1},
@@ -423,6 +539,49 @@ unpredictability.
 }
 ```
 
+`scores` is the Copeland score of every candidate and is always written.
+`wins` is left as it was: a count of pairs swept and a score are different
+questions, and the calibration above reads both.
+
+Two optional blocks say how a close run was settled. `consensus` is present
+— and `pairs` empty — when stage 1 fired:
+
+```json
+"pairs": [],
+"wins": {"p1": 0, "p2": 0, "p3": 0},
+"scores": {"p1": 0, "p2": 0, "p3": 0},
+"consensus": {
+  "normalisation": "nfkc-v1",
+  "groups": [["p1", "p2"], ["p3"]],
+  "chosen": "p2",
+  "agreement": "numeric"
+},
+"tie_break": {"among": ["p1", "p2"], "key": "length", "chosen": "p2"},
+"outcome": {"kind": "selected", "candidate_id": "p2",
+            "reason": "consensus: 2 of 3 agree on the normalised answer (numeric)"},
+"ranked": ["p2", "p1", "p3"]
+```
+
+`groups` partitions every candidate, singletons included, in candidate
+order. `agreement` is `exact` when every pair of members is the same
+normalised text and `numeric` when at least one pair needed the weaker
+test — the weaker finding is the honest label for the group. `usage` is
+zero and `latency_ms` is the wall time of a run that made no call.
+
+`tie_break` is present whenever more than one candidate was still in
+contention — inside a consensus group, or at the top of the Copeland
+ranking — and names the key that parted them (`consensus`, `length`,
+`hash` or `identical`). `among` is in ascending id order. On the judged path
+it reads:
+
+```json
+"scores": {"p1": 1.5, "p2": 1.5, "p3": 0},
+"tie_break": {"among": ["p1", "p2"], "key": "length", "chosen": "p1"},
+"outcome": {"kind": "selected", "candidate_id": "p1",
+            "reason": "copeland tie, score 1.5 of 2, tie broken by length among [p1 p2]"},
+"ranked": ["p1", "p2", "p3"]
+```
+
 An order's `latency_ms` is the wall clock of its call, both attempts
 included when the first did not parse; each attempt's own share is in the
 call file.
@@ -431,9 +590,9 @@ call file.
 An order's `status` is `ok`, `invalid_output` (still unparsable after the
 one retry), `timeout` or `error` (HTTP or decode failure). A `timeout` or
 an `error` escalates the whole outcome to `judge_timeout` or `judge_failed`
-**only if the pair it broke could still have decided the selection** (see
-above); either way it says nothing about any candidate, because the
-question was never put.
+**only if the pair it broke could still have taken a candidate to the top
+score** (see above); either way it says nothing about any candidate,
+because the question was never put.
 
 `swap_consistent_pairs` counts pairs whose two orders named the **same
 candidate** — including two ties. Choosing `A` in both orders is not
@@ -527,6 +686,16 @@ on stdout:
  "answer":"…/candidates/c1.txt","ranked":["c1","c3","c2"],"run":"…","judge":"…/judge.json"}
 ```
 
+`reason` is one of four sentences, and which one it is says which stage
+decided: `consensus: <n> of <m> agree on the normalised answer (<exact
+|numeric>)`, `condorcet winner, <n> of <m> pairs agreed under both orders`,
+`copeland winner, score <s> of <n> (no condorcet winner)`, or `copeland
+tie, score <s> of <n>, tie broken by <key> among [<ids>]`. The `kind` is
+`selected` for all four — the calibration above counts them as selections,
+not as four different outcomes — and the sentence is where the difference
+is readable. The candidate ids appear here, on the CLI, and in the trace;
+they do not appear in a `serve` response.
+
 `cmoa judge` prints the run directory on a second line. Both exit 0
 whatever the outcome.
 
@@ -542,15 +711,31 @@ the run and the completion id all name the same request.
 A 200 carries the usual chat completion plus a `cmoa` extension field:
 
 ```json
-"cmoa": {"run_id": "…", "selection": {"kind": "selected", "reason": "…"},
+"cmoa": {"run_id": "…",
+         "selection": {"kind": "selected", "reason": "…", "score": 1.5,
+                       "tie_break": {"key": "hash", "among": 2}},
          "judge": {"calls": 6, "swap_consistent_pairs": 3, "invalid_output_retries": 0, "latency_ms": 41230},
          "candidates": {"asked": 3, "ok": 3}, "harness": {"tree_sha256": "…"}}
 ```
 
-`usage` sums the proposers and the judge. The id of the proposer whose
-answer won is **not** in the response — it is in the trace. A client that
-could see it could learn to ask for it, and the pool is the router's
-decision.
+`selection.score` is the winner's Copeland score, absent when nothing was
+selected; a consensus costs no judge call, so its score is 0.
+`selection.consensus` is present when stage 1 fired and carries
+`{normalisation, agreement, agreed, of}`; `selection.tie_break` is present
+when a key had to part a tied set and carries `{key, among}`.
+
+All three are **counts and keys, never names**. `judge.json` says which
+candidates agreed and which were tied; the response says how many. The
+`reason` string is cut before the ` among [` a tie-break reason ends with,
+for the same purpose: the id of the proposer whose answer won is **not** in
+the response — it is in the trace. A client that could see it could learn
+to ask for it, and the pool is the router's decision.
+
+A consensus answers with `"calls": 0` and a `judge.latency_ms` of 0: the
+judge was never asked. That is the one shape in which a 200 carries no
+judge evidence at all, and `selection.consensus` is what explains it.
+
+`usage` sums the proposers and the judge.
 
 A selection that did not happen is an error, not a 200 with an apology:
 
@@ -558,9 +743,14 @@ A selection that did not happen is an error, not a 200 with an apology:
 | --- | --- | --- |
 | 400 | `invalid_request_error` | the body did not parse, the messages did not validate, or the conversation is over `max_context_bytes` |
 | 404 | `invalid_request_error` | `model` is not `serve.pool_name` |
-| 502 | `no_candidate` | `error.code` is the sub-reason, `error.param` the run id |
+| 502 | `no_candidate` | `error.code` is the sub-reason — `too_few_candidates` or `invalid_output`, the two that survive the score — and `error.param` the run id |
 | 502 | `judge_failed` | the judge could not be asked |
 | 504 | `judge_timeout` | the judge did not answer in time |
+
+A tied ranking is no longer one of these. Since a draw is half a win and a
+tie at the top is settled by a recorded key, 502 `no_candidate` means there
+was nothing to compare or nothing the parser could read — not that the
+judge found the answers close.
 
 `stream: true` returns `text/event-stream` with one
 `chat.completion.chunk` carrying the whole content and then `data: [DONE]`.

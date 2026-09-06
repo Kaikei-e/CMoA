@@ -3,9 +3,11 @@
 // On the coding face every candidate propose recorded as ok is applied to
 // its own worktree and verified in a container, and the first passing
 // candidate in configured order is selected. On the chat face the answers
-// go to the judge in internal/judge, which compares them pairwise in both
-// orders. Nothing is ever merged, and neither face asks a model which
-// answer to keep on the coding face or runs a container on the chat face.
+// go to internal/judge, which compares them with each other first and, only
+// when they disagree, asks the judge about each pair in both orders and
+// settles the verdicts with a Copeland score. Nothing is ever merged, and
+// neither face asks a model which answer to keep on the coding face or runs
+// a container on the chat face.
 //
 // The outcome of both is the sealed Selection type, mirrored into
 // select.json.

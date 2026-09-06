@@ -133,6 +133,11 @@
     "granite": 0,
     "qwen": 0
   },
+  "scores": {
+    "granite": 0.5,
+    "qwen": 0.5,
+    "gemma": 2
+  },
   "outcome": {
     "kind": "selected",
     "candidate_id": "gemma",

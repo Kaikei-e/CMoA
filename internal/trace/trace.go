@@ -152,15 +152,23 @@ const (
 // NoCandidateReason sub-classifies a no_candidate on the chat face. The
 // distribution of these words over a calibration set is itself a measure of
 // the judge, which is why they are recorded rather than folded into one.
+//
+// Three of them are historical. Since the chat face settles an undecided
+// ranking with a Copeland score and a deterministic tie-break, a run whose
+// pairs all drew, whose wins ran in a circle or whose leader was blocked by
+// one draw is selected rather than refused. They stay declared because
+// traces written before that change still carry the words.
 type NoCandidateReason string
 
 const (
 	// ReasonCycle: every pair was decided and the wins run in a circle.
+	// Historical: not produced since the score settled it.
 	ReasonCycle NoCandidateReason = "cycle"
 	// ReasonNoMajority: some pair was decided, but no candidate beat all
-	// the others.
+	// the others. Historical: not produced since the score settled it.
 	ReasonNoMajority NoCandidateReason = "no_majority"
-	// ReasonAllDraws: no pair was decided at all.
+	// ReasonAllDraws: no pair was decided at all. Historical: not produced
+	// since the score settled it.
 	ReasonAllDraws NoCandidateReason = "all_draws"
 	// ReasonInvalidOutput: the judge never returned usable JSON for a call
 	// the outcome needed, retry included.
@@ -388,8 +396,9 @@ type Select struct {
 	Order         []string        `json:"order"` // candidate ids in the order they were considered
 	Selection     SelectionRecord `json:"selection"`
 	AlsoPassed    []string        `json:"also_passed"`
-	// Ranked is the chat face's candidate ids by wins, ties broken by the
-	// order above. It is informational: only the Selection decides.
+	// Ranked is the chat face's candidate ids by Copeland score, ties
+	// broken by the chain judge.json's tie_break names. It is
+	// informational: only the Selection decides.
 	Ranked      []string  `json:"ranked,omitempty"`
 	MaxParallel int       `json:"max_parallel"`
 	FinishedAt  time.Time `json:"finished_at"`
@@ -418,8 +427,20 @@ type JudgeReport struct {
 	Presentation  Presentation   `json:"presentation"` // how they were shown to the judge
 	Pairs         []JudgePair    `json:"pairs"`
 	Wins          map[string]int `json:"wins"`
-	Outcome       JudgeOutcome   `json:"outcome"`
-	Ranked        []string       `json:"ranked"`
+	// Scores is the Copeland score of every candidate: a win is 1, a draw
+	// the judge did answer (tie or disagree) is 0.5 to each side, and a
+	// draw nobody could measure is 0. Wins is left as it was, because a
+	// count of clean sweeps and a score are different questions.
+	Scores map[string]float64 `json:"scores"`
+	// Consensus is present, and Pairs empty, when the candidates agreed on
+	// the normalised answer and the judge was never asked.
+	Consensus *Consensus `json:"consensus,omitempty"`
+	// TieBreak is present when more than one candidate was still in
+	// contention after the score — inside a consensus group, or at the top
+	// of the Copeland ranking — and says which key parted them.
+	TieBreak *TieBreak    `json:"tie_break,omitempty"`
+	Outcome  JudgeOutcome `json:"outcome"`
+	Ranked   []string     `json:"ranked"`
 	// DrawReasons counts the pairs by DrawReason. A decided pair is not in
 	// it, so the values sum to the number of draws.
 	DrawReasons          map[DrawReason]int  `json:"draw_reasons"`
@@ -539,6 +560,69 @@ type JudgeOutcome struct {
 	CandidateID string        `json:"candidate_id,omitempty"`
 	Reason      string        `json:"reason"`
 }
+
+// Consensus is the stage that runs before the judge: the candidates'
+// answers are normalised and compared to each other, and when more than
+// half of them say the same thing the judge is never asked. It records the
+// normalisation it used, so a trace written under one version of the
+// normaliser is not silently compared with another.
+type Consensus struct {
+	Normalisation string `json:"normalisation"`
+	// Groups partitions the candidates into sets that agree, in the order
+	// the candidates were given. A candidate that agrees with nobody is a
+	// group of one.
+	Groups    [][]string         `json:"groups"`
+	Chosen    string             `json:"chosen"`
+	Agreement ConsensusAgreement `json:"agreement"`
+}
+
+// ConsensusAgreement is how the members of the chosen group agreed. Both
+// tests are conservative, and which one fired is worth recording: an exact
+// agreement is a stronger finding than one number matching.
+type ConsensusAgreement string
+
+const (
+	// AgreementExact: the normalised answers are the same text.
+	AgreementExact ConsensusAgreement = "exact"
+	// AgreementNumeric: short answers whose last number is the same.
+	AgreementNumeric ConsensusAgreement = "numeric"
+)
+
+// TieBreak is how one candidate was chosen from several that the score
+// could not part. The chain is deterministic and its key is recorded,
+// because a tie broken silently is a decision nobody can audit. No key in
+// it reads the presentation order or the proposer order: those are the
+// biases the swap exists to detect, not tie-breakers.
+type TieBreak struct {
+	// Among is the tied set, by id in ascending order — the same list
+	// whatever order the run presented the candidates in.
+	Among  []string    `json:"among"`
+	Key    TieBreakKey `json:"key"`
+	Chosen string      `json:"chosen"`
+}
+
+// TieBreakKey names the key that decided.
+type TieBreakKey string
+
+const (
+	// TieBreakConsensus: the candidate whose normalised answer agrees with
+	// the most others in the run.
+	TieBreakConsensus TieBreakKey = "consensus"
+	// TieBreakLength: the shortest normalised answer, when the tied
+	// answers differ in length enough for brevity to mean something. The
+	// counter-lever to the judges' documented verbosity bias.
+	TieBreakLength TieBreakKey = "length"
+	// TieBreakHash: the lowest SHA-256 digest of the answer — of the
+	// normalised text, or of the raw text when the normalised texts are
+	// equal. Arbitrary, but arbitrary about the answer rather than about
+	// the position it was shown in or the proposer that wrote it.
+	TieBreakHash TieBreakKey = "hash"
+	// TieBreakIdentical: no key decided, because the candidates wrote the
+	// same answer to the byte. The lowest candidate id is returned — a
+	// property of the configuration, not of a position, chosen between
+	// answers that are indistinguishable.
+	TieBreakIdentical TieBreakKey = "identical"
+)
 
 // Sanitized is one rewrite the judge's fencing made to a candidate's text.
 // A rewrite changes what is judged, so it is recorded rather than done

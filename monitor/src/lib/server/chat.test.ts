@@ -25,9 +25,9 @@ const COMPLETION = JSON.stringify({
 
 const NO_CANDIDATE = JSON.stringify({
 	error: {
-		message: 'no candidate was selected: all_draws',
+		message: 'no candidate was selected: invalid_output',
 		type: 'no_candidate',
-		code: 'all_draws',
+		code: 'invalid_output',
 		param: '20260101T001000Z-22222222'
 	}
 });
@@ -122,7 +122,7 @@ describe('relayChat', () => {
 		expect(response.status).toBe(502);
 		const body = await response.json();
 		expect(body.error.type).toBe('no_candidate');
-		expect(body.error.code).toBe('all_draws');
+		expect(body.error.code).toBe('invalid_output');
 		expect(body.error.param).toBe('20260101T001000Z-22222222');
 	});
 

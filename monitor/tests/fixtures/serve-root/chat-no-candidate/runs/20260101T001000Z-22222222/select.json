@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "run_id": "20260101T001000Z-22222222",
-  "rule": "judge-pairwise",
+  "rule": "consensus-then-copeland",
   "order": [
     "granite",
     "qwen",
@@ -14,7 +14,7 @@
       "qwen",
       "gemma"
     ],
-    "reason": "no_majority"
+    "reason": "invalid_output"
   },
   "also_passed": [],
   "ranked": [

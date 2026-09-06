@@ -83,16 +83,16 @@ describe('faultOfBody and faultLabel', () => {
 		const fault = faultOfBody(
 			{
 				error: {
-					message: 'no candidate was selected: all_draws',
+					message: 'no candidate was selected: invalid_output',
 					type: 'no_candidate',
-					code: 'all_draws',
+					code: 'invalid_output',
 					param: '20260101T001000Z-22222222'
 				}
 			},
 			502
 		);
 		expect(fault.runId).toBe('20260101T001000Z-22222222');
-		expect(faultLabel(fault)).toBe('NO CANDIDATE (all_draws)');
+		expect(faultLabel(fault)).toBe('NO CANDIDATE (invalid_output)');
 	});
 
 	it('falls back to the status when the body says nothing', () => {

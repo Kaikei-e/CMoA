@@ -160,26 +160,60 @@ describe('deriveSnapshot: chat run that selected a candidate', () => {
 });
 
 describe('deriveSnapshot: chat run that selected nobody', () => {
+	// The score settles a tie, so a run that selects nobody is now the residual
+	// case: a judge whose answer no parser could read, or too few candidates.
 	it('names the sub-reason in both panels', async () => {
 		const snapshot = await snapshotOf('serve-root', 'chat-no-candidate');
 		expect(snapshot.select).toMatchObject({
 			state: 'no_candidate',
 			colour: 'bad',
-			text: 'no_candidate (no_majority)'
+			text: 'no_candidate (invalid_output)'
 		});
 		expect(snapshot.judge?.outcome).toEqual({
 			state: 'no_candidate',
-			text: 'no_candidate (no_majority)',
+			text: 'no_candidate (invalid_output)',
 			colour: 'bad'
 		});
 		expect(snapshot.judge?.retries).toBe(1);
-		expect(snapshot.judge?.pairs[2].verdict.text).toBe('draw (disagree)');
+		expect(snapshot.judge?.pairs[2].ba.text).toBe('ba invalid 25.9s');
+		expect(snapshot.judge?.pairs[2].verdict.text).toBe('draw (invalid)');
 		expect(snapshot.judge?.pairs[2].verdict.colour).toBe('bad');
 		expect(snapshot.judge?.wins).toEqual([
 			{ id: 'granite', wins: 1 },
 			{ id: 'qwen', wins: 0 },
 			{ id: 'gemma', wins: 1 }
 		]);
+	});
+});
+
+describe('deriveSnapshot: chat run the candidates settled among themselves', () => {
+	// judge.json is written with no pairs when a strict majority of the answers
+	// agree: the judge was never asked, so the grid has nothing to draw and the
+	// outcome line carries the whole story.
+	it('draws no judge grid and reports the consensus', async () => {
+		const snapshot = await snapshotOf('chat-consensus');
+		const judge = snapshot.judge!;
+		expect(judge.pairs).toEqual([]);
+		expect(judge.latencyText).toBe('0.0s');
+		expect(judge.wins).toEqual([
+			{ id: 'granite', wins: 0 },
+			{ id: 'qwen', wins: 0 },
+			{ id: 'gemma', wins: 0 }
+		]);
+		expect(judge.swapConsistent).toEqual({ pairs: 0, total: 0 });
+		expect(judge.outcome).toEqual({
+			state: 'selected',
+			text: 'selected granite  consensus: 2 of 3 agree on the normalised answ',
+			colour: 'ok'
+		});
+		expect(snapshot.select).toMatchObject({
+			state: 'selected',
+			colour: 'ok',
+			text: 'selected granite',
+			kind: 'selected'
+		});
+		expect(snapshot.select.ranked).toEqual(['granite', 'qwen', 'gemma']);
+		expect(snapshot.header.phase).toBe('done');
 	});
 });
 

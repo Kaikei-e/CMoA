@@ -1,22 +1,27 @@
 # Architecture decision records
 
-Twelve records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
+Thirteen records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
 trace schema in [../trace-schema.md](../trace-schema.md) are what the binary does, so a record is
 read for *why* a flag, a status name or a file exists, and the code for what it accepts today.
 Records 0002 onward are written in Japanese, the language they were argued in.
 
-Read **0011 first**: it fixes the scope of v1 — the coding face of v0 plus a chat face with a single
-blind judge, six commands of which only `serve` stays resident, Go 1.27 and the standard library alone —
-and carries forward the type vocabulary the other records lean on. It supersedes 0009, which fixed v0
-at three commands and no judge; 0009 in turn superseded 0002. Both stay as the records the others were
-argued against.
+Read **0011 first, then 0013**: 0011 fixes the scope of v1 — the coding face of v0 plus a chat face
+with a single blind judge, six commands of which only `serve` stays resident, Go 1.27 and the standard
+library alone — and carries forward the type vocabulary the other records lean on. It supersedes 0009,
+which fixed v0 at three commands and no judge; 0009 in turn superseded 0002. 0013 supersedes 0011 and
+changes exactly one of its decisions: how the chat face turns six pairwise verdicts into one answer.
+Everything else 0011 decided is carried forward word for word, so 0011 is still the record to read for
+what v1 *is*, and 0013 for how it now chooses. All three stay as the records the others were argued
+against.
 0003 through 0008 each take one of the four responsibilities CMoA owns and settle it; they depend on
 0002 and, where noted, on each other, and can otherwise be read in any order.
 
-Every record is **Accepted** except 0002, which 0009 superseded on 2026-09-05, and 0009, which 0011 superseded on 2026-09-06. A decision that
+Every record is **Accepted** except 0002, which 0009 superseded on 2026-09-05, 0009, which 0011 superseded on 2026-09-06,
+and 0011, which 0013 superseded the same day. A decision that
 replaces one of these declares `supersedes:` in its frontmatter and moves the old record's status to
 `superseded`; nobody edits an accepted record to change what it decided. `docdag validate` is the
-gate that keeps that true.
+gate that keeps that true. Record numbers in frontmatter are **quoted** (`supersedes: ["0011"]`):
+unquoted, YAML reads `0011` as an octal integer and the edge silently lands on 0009.
 
 ## [0001 — adopt DocDag for architecture decision records](0001-adopt-docdag-for-architecture-decision-records.md)
 
@@ -136,7 +141,7 @@ into `harness.render` so the layer above can check it rendered what it meant to.
 `--temperature` pin every proposer for a run, which is what a paired baseline-versus-edit measurement
 needs. CMoA still interprets no vault content; it reads files.
 
-## [0011 — v1: the chat face, a blind pairwise judge, `judge` and `serve`](0011-chat-face-blind-pairwise-judge-and-serve.md)
+## [0011 — v1: the chat face, a blind pairwise judge, `judge` and `serve`](0011-chat-face-blind-pairwise-judge-and-serve.md) — superseded by 0013
 
 The record that opens the second face. A chat task is `task.json` version 3 with `face: chat`; the same
 router asks every proposer, and a single judge model of a different family picks one answer by
@@ -159,3 +164,24 @@ any other client would, so `serve` runs the round and writes the trace, and the 
 run on screen. A `no_candidate` is shown as the fault it is, never patched over by a human pick or
 a retry. Configuration is `cmoa.json` plus the directories to watch, never a second list of
 proposers. Depends on 0007 and 0011.
+
+## [0013 — consensus first, then a Copeland score](0013-consensus-then-copeland-for-chat-selection.md)
+
+The record that fixes what 0011 got wrong about draws, and nothing else. The chat face asked for a
+Condorcet winner over six pairwise calls and treated every draw as no information, so ten of eleven
+served requests and 217 of 400 calibration runs came back `no_candidate` — including a question all
+three proposers answered correctly and identically, and one where the two right answers each beat the
+third and then tied each other. Agreement among candidates was being read as failure. So the face now
+compares the answers to each other first: normalise them (a hand-rolled compatibility fold, case,
+markdown, list markers, whitespace, trailing punctuation), and if a strict majority say the same
+thing — the same text, or the same last number in a short answer — return one of them and never ask
+the judge. When they disagree the six calls run unchanged and the draws are finally counted: a win is
+1, a draw the judge answered is 0.5 to each side, which is MT-Bench's own reading of an inconsistent
+swap and the way an arena folds a tie into Bradley-Terry. A machine failure still outranks the score.
+What the score cannot part goes to one recorded chain — agreement with the rest of the run, then the
+shorter answer where the gap is real, then the lowest SHA-256 of the answer's own text, and for
+answers identical to the byte the lowest candidate id under its own name — and no key in it reads the
+presentation position or the proposer order, because 0011's argument against those is right and is
+kept. `outcome.kind` does not move, so the calibration above keeps counting; `cycle`,
+`no_majority` and `all_draws` stay in the vocabulary as words older traces carry, and are no longer
+produced. It supersedes 0011 and keeps every other decision 0011 made.

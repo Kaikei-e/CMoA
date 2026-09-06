@@ -85,7 +85,7 @@ whichever run is newest and switches when a newer one appears.
 | `FLEET` | one cell per proposer plus `JUDGE` and `SERVE`: reach lamp, model, state word, decoded tokens, tokens/second, prefill progress. Always live, run or no run |
 | `ROUND` | run id, face, elapsed, phase, the run directory, and the `FOLLOW` / `PINNED` chip |
 | `PROPOSE` | one row per proposer: state, a segmented budget bar, decoded tokens, rate; underneath, the candidate status, the answer excerpt or `N file(s) +a/-d`, timing, and `verify <status>` (coding) or reasoning bytes (chat) |
-| `JUDGE` | chat only: the judge server, the presentation seed and nonce, the pair x ab/ba grid with its verdict column, wins, swap-consistency, retries and outcome. A verdict inferred from the call files before `judge.json` lands is tagged `PROV` |
+| `JUDGE` | chat only: the judge server, the presentation seed and nonce, the pair x ab/ba grid with its verdict column, wins, swap-consistency, retries and outcome. A verdict inferred from the call files before `judge.json` lands is tagged `PROV`. A round the candidates settled among themselves never asked the judge, so `judge.json` holds no pairs and the grid is empty -- the outcome line carries the whole story |
 | `SELECT` | the selection sentence, the ranking, and anything else that passed |
 | `TIMELINE` | a time axis with a marker per phase, and the same offsets as text |
 | `CALIBRATION` | per judge: verdict, human / swap / rerun kappa, tie handling, and whether it is still in force |
@@ -108,8 +108,11 @@ round that produced it stays on screen. Each answer carries a dim line —
 run.
 
 A round that selected nobody is not an answer with an apology: the panel shows
-`NO CANDIDATE (all_draws) run <id>` in red, with no assistant line, and the run
-id opens the round that refused. The question stays in the transcript, struck
+`NO CANDIDATE (invalid_output) run <id>` in red, with no assistant line, and the run
+id opens the round that refused. Since the chat face settles a tied ranking
+with a score and a recorded tie-break, that 502 is the residual case only --
+too few answers to compare, or a judge whose answer no parser could read --
+and 504 is still the judge running out of time. The question stays in the transcript, struck
 through, so it can be edited and sent again; it is not forwarded as history in
 later turns, because a round that never happened is not part of the
 conversation. The transcript lives in `sessionStorage` and lasts as long as the

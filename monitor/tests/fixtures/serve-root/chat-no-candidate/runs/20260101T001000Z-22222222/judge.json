@@ -115,18 +115,16 @@
         {
           "first": "gemma",
           "second": "qwen",
-          "choice": "A",
-          "choice_candidate": "gemma",
-          "status": "ok",
-          "retries": 0,
-          "latency_ms": 16880,
+          "status": "invalid_output",
+          "retries": 1,
+          "latency_ms": 25920,
           "request_sha256": "f514743fe597ba002a5776490d58cb3cc4b34e71bb04797e9d009bdac0bf5c8f",
           "response_sha256": "3a81c74e6a1b323f7adc81df2a9f02e58d62f63dbe5b60f3078e8fc3e1058f3e",
           "file": "judge/2-ba.json"
         }
       ],
       "verdict": "draw",
-      "draw_reason": "disagree"
+      "draw_reason": "invalid"
     }
   ],
   "wins": {
@@ -134,9 +132,14 @@
     "gemma": 1,
     "qwen": 0
   },
+  "scores": {
+    "granite": 1,
+    "qwen": 0,
+    "gemma": 1
+  },
   "outcome": {
     "kind": "no_candidate",
-    "reason": "no_majority"
+    "reason": "invalid_output"
   },
   "ranked": [
     "granite",
@@ -144,9 +147,9 @@
     "qwen"
   ],
   "draw_reasons": {
-    "disagree": 1
+    "invalid": 1
   },
-  "swap_consistent_pairs": 3,
+  "swap_consistent_pairs": 2,
   "invalid_output_retries": 1,
   "sanitized": [],
   "injection_flags": {

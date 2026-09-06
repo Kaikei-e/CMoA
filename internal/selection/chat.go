@@ -16,8 +16,12 @@ import (
 	"github.com/Kaikei-e/CMoA/internal/trace"
 )
 
-// RuleJudgePairwise is what select.json records on the chat face.
-const RuleJudgePairwise = "judge-pairwise"
+// RuleConsensusThenCopeland is what select.json records on the chat face:
+// the candidates are compared with each other first, and the judge's
+// pairwise verdicts are settled with a Copeland score when they are not
+// unanimous. It replaces the rule word `judge-pairwise`, which named only
+// the second half.
+const RuleConsensusThenCopeland = "consensus-then-copeland"
 
 // ChatOptions tune a chat-face selection.
 type ChatOptions struct {
@@ -116,7 +120,7 @@ func RunChat(ctx context.Context, cfg *config.Config, t *task.Task, dir trace.Di
 	rec := &trace.Select{
 		SchemaVersion: trace.SchemaVersion,
 		RunID:         dir.ID(),
-		Rule:          RuleJudgePairwise,
+		Rule:          RuleConsensusThenCopeland,
 		Order:         order,
 		Selection:     Record(sel),
 		AlsoPassed:    []string{},

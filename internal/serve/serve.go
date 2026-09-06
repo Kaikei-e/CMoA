@@ -13,7 +13,14 @@
 // No candidate is 502, a judge that ran out of time is 504, and a judge
 // that could not be reached is 502 — because a caller that cannot tell
 // "nobody answered well" from "here is an answer" will treat the second as
-// the first.
+// the first. Since the chat face settles a tied ranking with a score and a
+// deterministic tie-break, no candidate is now the residual case only:
+// fewer than two answers to compare, or a judge whose answers no parser
+// could read.
+//
+// How the answer was chosen is in the `cmoa` extension — the score, the
+// consensus and the tie-break — counted rather than named, because which
+// proposer wrote the answer stays in the trace.
 package serve
 
 import (
@@ -318,13 +325,32 @@ func (s *Server) respond(dir trace.Dir, id trace.RunID, sel selection.Selection)
 	if err != nil {
 		return nil, err
 	}
+	rec := selection.Record(sel)
 	ext := extension{
 		RunID:     string(id),
-		Selection: selectionInfo{Kind: string(selection.Record(sel).Kind), Reason: selection.Record(sel).Reason},
+		Selection: selectionInfo{Kind: string(rec.Kind), Reason: publicReason(rec.Reason)},
 		Judge: judgeInfo{
 			Calls: 2 * len(rep.Pairs), SwapConsistentPairs: rep.SwapConsistentPairs,
 			InvalidOutputRetries: rep.InvalidOutputRetries, LatencyMS: rep.LatencyMS,
 		},
+	}
+	if score, ok := rep.Scores[rep.Outcome.CandidateID]; ok && rec.Kind == trace.SelectionSelected {
+		ext.Selection.Score = &score
+	}
+	if c := rep.Consensus; c != nil {
+		agreed := 0
+		for _, g := range c.Groups {
+			if len(g) > agreed {
+				agreed = len(g)
+			}
+		}
+		ext.Selection.Consensus = &consensusInfo{
+			Normalisation: c.Normalisation, Agreement: string(c.Agreement),
+			Agreed: agreed, Of: len(rep.Candidates),
+		}
+	}
+	if tb := rep.TieBreak; tb != nil {
+		ext.Selection.TieBreak = &tieBreakInfo{Key: string(tb.Key), Among: len(tb.Among)}
 	}
 	if run.Harness.Render != nil {
 		ext.Harness = &harnessInfo{TreeSHA256: run.Harness.Render.TreeSHA256}
@@ -415,9 +441,44 @@ type extension struct {
 	Harness    *harnessInfo   `json:"harness,omitempty"`
 }
 
+// selectionInfo says how the answer was chosen, in numbers. The candidate
+// ids the trace records — which group agreed, which candidates were tied —
+// are deliberately not here: a client that could see them could learn to
+// ask for one proposer by name.
 type selectionInfo struct {
 	Kind   string `json:"kind"`
 	Reason string `json:"reason"`
+	// Score is the winner's Copeland score, absent when nothing was
+	// selected. A consensus costs no judge call, so its score is 0.
+	Score     *float64       `json:"score,omitempty"`
+	Consensus *consensusInfo `json:"consensus,omitempty"`
+	TieBreak  *tieBreakInfo  `json:"tie_break,omitempty"`
+}
+
+// consensusInfo is present when the candidates agreed among themselves and
+// the judge was never asked.
+type consensusInfo struct {
+	Normalisation string `json:"normalisation"`
+	Agreement     string `json:"agreement"` // exact, or numeric
+	Agreed        int    `json:"agreed"`    // how many candidates said the same thing
+	Of            int    `json:"of"`        // how many were compared
+}
+
+// tieBreakInfo is present when more than one candidate was still in
+// contention and a deterministic key parted them.
+type tieBreakInfo struct {
+	Key   string `json:"key"`   // consensus, length, hash, or identical
+	Among int    `json:"among"` // how many were tied
+}
+
+// publicReason keeps the outcome's explanation and drops the candidate ids
+// a tie-break names at the end of it. The count is in tie_break.among; the
+// names are in judge.json, where the response cannot reach them.
+func publicReason(s string) string {
+	if i := strings.Index(s, " among ["); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 type judgeInfo struct {

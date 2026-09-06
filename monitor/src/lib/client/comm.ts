@@ -37,7 +37,7 @@ export interface CommMessage {
 export interface CommFault {
 	/** CMoA's error `type`, e.g. `no_candidate`, or `monitor` for a local fault. */
 	type: string;
-	/** CMoA's error `code`, e.g. `all_draws`. Empty when there is none. */
+	/** CMoA's error `code`, e.g. `invalid_output`. Empty when there is none. */
 	code: string;
 	message: string;
 	/** The run id, which CMoA puts in `param` on an error it produced. */
@@ -120,7 +120,7 @@ export function metaLine(run: CommRun): string {
 	return `run ${run.id}${metaRest(run)}`;
 }
 
-/** `NO CANDIDATE (all_draws)` — the type as a word, the code as CMoA spells it. */
+/** `NO CANDIDATE (invalid_output)` — the type as a word, the code as CMoA spells it. */
 export function faultLabel(fault: CommFault): string {
 	const head = fault.type.replace(/_/g, ' ').toUpperCase();
 	return fault.code && fault.code !== fault.type ? `${head} (${fault.code})` : head;

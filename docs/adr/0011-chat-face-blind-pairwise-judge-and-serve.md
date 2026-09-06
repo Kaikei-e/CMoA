@@ -1,6 +1,6 @@
 ---
 title: "v1 のスコープ：チャット面を足す——盲検の総当たり pairwise 審判、task.json v3、judge と serve。0009 の決定を引き継ぐ"
-status: accepted
+status: superseded
 date: 2026-09-06
 supersedes: [0009]
 depends-on: [0003, 0006, 0007, 0008, 0010]
@@ -10,9 +10,12 @@ depends-on: [0003, 0006, 0007, 0008, 0010]
 
 ## ステータス
 
-Accepted
+Superseded by 0013
 
 採択日: 2026-09-06
+
+2026-09-06、ADR-0013 が本記録を supersede した。0013 が改めるのは D4 のうち結末の規則と
+「決定論的な代替規則は置かない」の一節だけで、D1・D2・D3・D5・D6 はそのまま効力を持つ。
 
 ## 日付
 

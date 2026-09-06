@@ -57,9 +57,9 @@ test('a run that selected nobody says so in red', async ({ page }) => {
 	await open(page, `/?run=${CHAT_NO_CANDIDATE}`);
 
 	const sentence = page.getByTestId('select-sentence');
-	await expect(sentence).toHaveText('no_candidate (no_majority)');
+	await expect(sentence).toHaveText('no_candidate (invalid_output)');
 	await expect(sentence).toHaveAttribute('data-colour', 'bad');
-	await expect(page.getByTestId('judge-grid')).toContainText('no_candidate (no_majority)');
+	await expect(page.getByTestId('judge-grid')).toContainText('no_candidate (invalid_output)');
 });
 
 test('a coding run shows verify statuses and no judge panel', async ({ page }) => {
@@ -82,7 +82,7 @@ test('the runs drawer lists the fixtures and a row pins the run', async ({ page 
 
 	await page.locator(`[data-run="${CHAT_NO_CANDIDATE}"]`).click();
 	await expect(page).toHaveURL(new RegExp(`\\?run=${CHAT_NO_CANDIDATE}$`));
-	await expect(page.getByTestId('select-sentence')).toHaveText('no_candidate (no_majority)');
+	await expect(page.getByTestId('select-sentence')).toHaveText('no_candidate (invalid_output)');
 
 	await page.keyboard.press('Escape');
 	await expect(page.getByTestId('run-row')).toHaveCount(0);
@@ -155,7 +155,7 @@ test('a round that selected nobody shows the fault and no answer', async ({ page
 	await page.getByTestId('comm-input').press('Enter');
 
 	const fault = page.getByTestId('comm-fault');
-	await expect(fault).toContainText('NO CANDIDATE (all_draws)');
+	await expect(fault).toContainText('NO CANDIDATE (invalid_output)');
 	await expect(fault).toContainText(`run ${CANNED_RUN_NO_CANDIDATE}`);
 	await expect(page.getByTestId('comm-assistant')).toHaveCount(0);
 	// The refused turn stays on screen so it can be edited and sent again.
