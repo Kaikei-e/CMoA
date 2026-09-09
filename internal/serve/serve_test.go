@@ -1,7 +1,9 @@
 package serve
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,15 +24,28 @@ import (
 // proposers answer with the text they are given, and the judge prefers
 // whichever candidate block holds `wants`.
 type fleet struct {
-	t      *testing.T
-	answer string // what p1 says
-	other  string // what p2 says; empty means the same as p1
-	wants  string
-	judge  func(w http.ResponseWriter) bool // nil: answer normally
-	mutate func(*config.Config)             // nil: leave the parsed config alone
+	t       *testing.T
+	answer  string // what p1 says
+	other   string // what p2 says; empty means the same as p1
+	wants   string
+	judge   func(w http.ResponseWriter) bool // nil: answer normally
+	mutate  func(*config.Config)             // nil: leave the parsed config alone
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
 }
 
 func (f *fleet) proposer(w http.ResponseWriter, r *http.Request) {
+	if f.entered != nil {
+		f.once.Do(func() { close(f.entered) })
+	}
+	if f.release != nil {
+		select {
+		case <-f.release:
+		case <-r.Context().Done():
+			return
+		}
+	}
 	var body struct {
 		Model string `json:"model"`
 	}
@@ -74,6 +90,11 @@ func (f *fleet) verdict(w http.ResponseWriter, r *http.Request) {
 // server builds a fake fleet and returns the handler and the runs
 // directory the served tasks are written under.
 func server(t *testing.T, f *fleet) (http.Handler, string) {
+	s, runs := serverInstance(t, f, Options{})
+	return s.Handler(), runs
+}
+
+func serverInstance(t *testing.T, f *fleet, opt Options) (*Server, string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
@@ -112,11 +133,14 @@ func server(t *testing.T, f *fleet) (http.Handler, string) {
 	if f.mutate != nil {
 		f.mutate(cfg)
 	}
-	s, err := New(cfg, Options{Version: "test"})
+	if opt.Version == "" {
+		opt.Version = "test"
+	}
+	s, err := New(cfg, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s.Handler(), runs
+	return s, runs
 }
 
 func post(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {
@@ -128,6 +152,236 @@ func post(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder 
 }
 
 const ask = `{"model":"cmoa","messages":[{"role":"user","content":"why?"}],"top_p":0.9}`
+
+func performanceLogs(t *testing.T, lines []string) []performance {
+	t.Helper()
+	var got []performance
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "performance ") {
+			continue
+		}
+		var record performance
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "performance ")), &record); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, record)
+	}
+	return got
+}
+
+func loggedServer(t *testing.T, f *fleet) (*Server, func() []performance) {
+	t.Helper()
+	var mu sync.Mutex
+	var lines []string
+	s, _ := serverInstance(t, f, Options{Log: func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}})
+	return s, func() []performance {
+		mu.Lock()
+		defer mu.Unlock()
+		return performanceLogs(t, lines)
+	}
+}
+
+func onePerformance(t *testing.T, records []performance) performance {
+	t.Helper()
+	if len(records) != 1 {
+		t.Fatalf("got %d performance records: %+v", len(records), records)
+	}
+	return records[0]
+}
+
+func TestPerformanceSuccessLinksRequestAndRun(t *testing.T) {
+	s, records := loggedServer(t, &fleet{t: t, answer: "a", other: "b", wants: "a"})
+	w := post(t, s.Handler(), ask)
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d: %s", w.Code, w.Body)
+	}
+	p := onePerformance(t, records())
+	if p.Outcome != performanceSuccess || p.RequestID == "" || p.RunID == "" || p.RunID == p.RequestID ||
+		w.Header().Get("X-CMoA-Request-ID") != p.RequestID || p.StartedAt == nil ||
+		p.AcceptedAt.IsZero() || p.CompletedAt.IsZero() || p.AcceptedAt.After(*p.StartedAt) || p.StartedAt.After(p.CompletedAt) ||
+		p.TotalMS < p.ParseMS+p.QueueMS {
+		t.Fatalf("performance %+v, header %q", p, w.Header().Get("X-CMoA-Request-ID"))
+	}
+}
+
+func TestPerformanceQueueCancellationHasNoRun(t *testing.T) {
+	f := &fleet{t: t, answer: "a", other: "b", wants: "a", entered: make(chan struct{}), release: make(chan struct{})}
+	s, records := loggedServer(t, f)
+	first := make(chan struct{})
+	go func() {
+		defer close(first)
+		_ = post(t, s.Handler(), ask)
+	}()
+	<-f.entered
+	ctx, cancel := context.WithCancel(context.Background())
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.Handler().ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/chat/completions", strings.NewReader(ask)))
+	}()
+	// The first request owns the only semaphore slot, while parsing this
+	// small valid request completes well within this interval.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+	close(f.release)
+	<-first
+	var canceled *performance
+	for _, p := range records() {
+		if p.Outcome == performanceQueueCanceled {
+			p := p
+			canceled = &p
+		}
+	}
+	if canceled == nil || canceled.RunID != "" || canceled.StartedAt != nil || canceled.CanceledPhase != performanceQueue ||
+		w.Header().Get("X-CMoA-Request-ID") != canceled.RequestID {
+		t.Fatalf("performance %+v header %q", canceled, w.Header().Get("X-CMoA-Request-ID"))
+	}
+}
+
+func TestPerformancePreParseCancellationHasNoStartOrRun(t *testing.T) {
+	s, records := loggedServer(t, &fleet{t: t, answer: "a", other: "b", wants: "a"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/chat/completions", strings.NewReader(ask)))
+	p := onePerformance(t, records())
+	if p.Outcome != performanceExecutionCanceled || p.CanceledPhase != performanceParse || p.RunID != "" || p.StartedAt != nil ||
+		w.Header().Get("X-CMoA-Request-ID") != p.RequestID {
+		t.Fatalf("performance %+v", p)
+	}
+}
+
+func TestPerformanceInvalidRequestHasNoStartOrRun(t *testing.T) {
+	s, records := loggedServer(t, &fleet{t: t, answer: "a", other: "b", wants: "a"})
+	w := post(t, s.Handler(), `{"model":"other","messages":[{"role":"user","content":"why?"}]}`)
+	p := onePerformance(t, records())
+	if w.Code != http.StatusNotFound || p.Outcome != performanceInvalidRequest || p.RunID != "" || p.StartedAt != nil ||
+		p.CanceledPhase != "" || w.Header().Get("X-CMoA-Request-ID") != p.RequestID {
+		t.Fatalf("status %d performance %+v", w.Code, p)
+	}
+}
+
+func TestPerformanceExecutionCancellationKeepsTraceLink(t *testing.T) {
+	f := &fleet{t: t, answer: "a", other: "b", wants: "a", entered: make(chan struct{}), release: make(chan struct{})}
+	s, records := loggedServer(t, f)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/chat/completions", strings.NewReader(ask)))
+	}()
+	<-f.entered
+	cancel()
+	<-done
+	var canceled *performance
+	for _, p := range records() {
+		if p.CanceledPhase != "" {
+			p := p
+			canceled = &p
+		}
+	}
+	if canceled == nil || canceled.RunID == "" || canceled.CanceledPhase != performancePropose ||
+		canceled.Outcome != performanceExecutionCanceled {
+		t.Fatalf("performance %+v", canceled)
+	}
+	close(f.release)
+	if w := post(t, s.Handler(), ask); w.Code != http.StatusOK {
+		t.Fatalf("slot was not released: %d: %s", w.Code, w.Body)
+	}
+}
+
+func TestPerformanceRecordsConcurrentRequestsSeparately(t *testing.T) {
+	f := &fleet{t: t, answer: "a", other: "b", wants: "a"}
+	f.mutate = func(c *config.Config) { c.Serve.MaxInflight = 2 }
+	s, records := loggedServer(t, f)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = post(t, s.Handler(), ask)
+		}()
+	}
+	wg.Wait()
+	got := records()
+	if len(got) != 2 || got[0].RequestID == got[1].RequestID || got[0].RunID == got[1].RunID ||
+		got[0].RunID == "" || got[1].RunID == "" {
+		t.Fatalf("performance %+v", got)
+	}
+}
+
+type errorResponseWriter struct{ header http.Header }
+
+func (w *errorResponseWriter) Header() http.Header       { return w.header }
+func (w *errorResponseWriter) WriteHeader(int)           {}
+func (w *errorResponseWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
+
+type cancelingErrorWriter struct {
+	header http.Header
+	cancel context.CancelFunc
+}
+
+func (w *cancelingErrorWriter) Header() http.Header { return w.header }
+func (w *cancelingErrorWriter) WriteHeader(int)     {}
+func (w *cancelingErrorWriter) Write([]byte) (int, error) {
+	w.cancel()
+	return 0, errors.New("write failed after cancellation")
+}
+
+func TestPerformanceRecordsResponseWriteError(t *testing.T) {
+	s, records := loggedServer(t, &fleet{t: t, answer: "a", other: "b", wants: "a"})
+	for _, body := range []string{ask, `{"model":"cmoa","stream":true,"messages":[{"role":"user","content":"why?"}]}`} {
+		w := &errorResponseWriter{header: make(http.Header)}
+		s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))
+	}
+	got := records()
+	if len(got) != 2 {
+		t.Fatalf("got %d performance records: %+v", len(got), got)
+	}
+	for _, p := range got {
+		if p.Outcome != performanceWriteError || p.RunID == "" || p.WriteMS < 0 || p.RequestID == "" {
+			t.Fatalf("performance %+v", p)
+		}
+	}
+}
+
+func TestPerformanceWriteErrorPreservesWriteCancellation(t *testing.T) {
+	s, records := loggedServer(t, &fleet{t: t, answer: "a", other: "b", wants: "a"})
+	ctx, cancel := context.WithCancel(context.Background())
+	w := &cancelingErrorWriter{header: make(http.Header), cancel: cancel}
+	s.Handler().ServeHTTP(w, httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/chat/completions", strings.NewReader(ask)))
+	p := onePerformance(t, records())
+	if p.Outcome != performanceWriteError || p.CanceledPhase != performanceWrite || p.RunID == "" {
+		t.Fatalf("performance %+v", p)
+	}
+}
+
+func TestPerformanceSelectionErrorLinksRun(t *testing.T) {
+	f := &fleet{t: t, answer: "a", other: "b", wants: "a"}
+	f.judge = func(w http.ResponseWriter) bool {
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{"message": map[string]any{"content": "not json"}}}})
+		return true
+	}
+	s, records := loggedServer(t, f)
+	w := post(t, s.Handler(), ask)
+	var response struct {
+		Error struct{ Param string } `json:"error"`
+	}
+	if w.Code != http.StatusBadGateway || json.Unmarshal(w.Body.Bytes(), &response) != nil {
+		t.Fatalf("%d: %s", w.Code, w.Body)
+	}
+	p := onePerformance(t, records())
+	if p.Outcome != performanceSelectionError || p.RunID == "" || p.RunID != response.Error.Param {
+		t.Fatalf("performance %+v, error %+v", p, response.Error)
+	}
+}
 
 func TestCompletion(t *testing.T) {
 	h, _ := server(t, &fleet{t: t, answer: "because of scattering", other: "no idea", wants: "scattering"})

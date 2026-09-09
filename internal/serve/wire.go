@@ -107,35 +107,33 @@ type apiError struct {
 	Code    string `json:"code,omitempty"`
 }
 
-func writeCompletion(w http.ResponseWriter, stream bool, out *answered) {
+func writeCompletion(w http.ResponseWriter, stream bool, out *answered) error {
 	if out.apiErr != nil {
-		writeError(w, out.status, *out.apiErr)
-		return
+		return writeError(w, out.status, *out.apiErr)
 	}
 	if stream {
-		writeStream(w, out.completion)
-		return
+		return writeStream(w, out.completion)
 	}
-	writeJSON(w, http.StatusOK, out.completion)
+	return writeJSON(w, http.StatusOK, out.completion)
 }
 
-func writeJSON(w http.ResponseWriter, status int, value any) {
+func writeJSON(w http.ResponseWriter, status int, value any) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
-	_ = encoder.Encode(value)
+	return encoder.Encode(value)
 }
 
-func writeError(w http.ResponseWriter, status int, apiErr apiError) {
-	writeJSON(w, status, struct {
+func writeError(w http.ResponseWriter, status int, apiErr apiError) error {
+	return writeJSON(w, status, struct {
 		Error apiError `json:"error"`
 	}{apiErr})
 }
 
 // writeStream sends the selected response as one SSE chunk, followed by its
 // terminator. Selection completes before any answer content is available.
-func writeStream(w http.ResponseWriter, completion *completion) {
+func writeStream(w http.ResponseWriter, completion *completion) error {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -152,13 +150,18 @@ func writeStream(w http.ResponseWriter, completion *completion) {
 	}}
 	bytes, err := json.Marshal(chunk)
 	if err != nil {
-		return
+		return err
 	}
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", bytes)
-	_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", bytes); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err != nil {
+		return err
+	}
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
+	return nil
 }
 
 // publicReason removes tie-break candidate ids from the client-visible text.

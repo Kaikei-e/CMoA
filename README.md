@@ -171,10 +171,27 @@ curl http://127.0.0.1:8095/v1/chat/completions \
 
 The chat-only server exposes `GET /v1/models` and `POST /v1/chat/completions`.
 Successful responses include a `cmoa` field with selection metadata and a run id;
-accepted requests leave traces under `serve.runs_dir`. `stream: true` returns one
-SSE chunk after selection, followed by `[DONE]`. No candidate or a failed judge
-returns 502; a judge timeout returns 504. It binds loopback by default, has no
-authentication or TLS, and requires `--allow-remote` to bind elsewhere.
+requests that create a run leave traces under `serve.runs_dir`. `stream: true`
+returns one SSE chunk after selection, followed by `[DONE]`. No candidate or a
+failed judge returns 502; a judge timeout returns 504. It binds loopback by
+default, has no authentication or TLS, and requires `--allow-remote` to bind
+elsewhere.
+
+For each `POST /v1/chat/completions`, `serve` writes one terminal structured
+record to its existing stderr logger. The line begins `performance ` and its
+remainder is JSON; it is not a trace file or a standalone JSONL stream. The
+server generates `request_id` and returns the same value in
+`X-CMoA-Request-ID`; it does not use an inbound request-ID header. A record has
+UTC `accepted_at` and `completed_at`, server-wall `parse_ms`, `queue_ms`,
+`task_ms`, `propose_ms`, `select_ms`, `respond_ms`, `write_ms`, and `total_ms`,
+plus an outcome. `started_at` is present after semaphore acquisition.
+`queue_ms` is the wait from completed parsing to semaphore acquisition or queue
+cancellation. `run_id` is included only once a run exists, and is distinct from
+`request_id`, so join records to trace data through that field and keep queue
+cancellation as an observation without a trace. `write_ms` ends when the
+handler finishes writing the response; it does not show that a client received
+it. The records exclude request content and headers, and describe this server
+process rather than model-server or network time.
 
 [CMoA Monitor](monitor/README.md) is a separate SvelteKit UI for fleet health,
 run history, candidate/judge inspection and a chat panel. It reads traces and

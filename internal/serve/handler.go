@@ -1,14 +1,17 @@
 package serve
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/Kaikei-e/CMoA/internal/propose"
 	"github.com/Kaikei-e/CMoA/internal/task"
+	"github.com/Kaikei-e/CMoA/internal/trace"
 )
 
 // request is the subset of the OpenAI body CMoA acts on. Every other
@@ -22,7 +25,7 @@ type request struct {
 }
 
 func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, modelList{
+	_ = writeJSON(w, http.StatusOK, modelList{
 		Object: "list",
 		Data: []model{{
 			ID:      s.cfg.Serve.PoolName,
@@ -33,29 +36,96 @@ func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) completions(w http.ResponseWriter, r *http.Request) {
+	accepted := time.Now()
+	requestID := "req_" + string(trace.NewRunID(s.opt.Now()))
+	w.Header().Set("X-CMoA-Request-ID", requestID)
+	perf := performance{RequestID: requestID, AcceptedAt: accepted.UTC()}
+	defer func() {
+		perf.CompletedAt = time.Now().UTC()
+		perf.TotalMS = elapsedMS(accepted)
+		s.logPerformance(perf)
+	}()
+
+	parsed := time.Now()
 	req, failure := s.parseCompletionRequest(r)
+	perf.ParseMS = elapsedMS(parsed)
+	if r.Context().Err() != nil {
+		perf.Outcome = performanceExecutionCanceled
+		perf.CanceledPhase = performanceParse
+		return
+	}
 	if failure != nil {
-		writeError(w, failure.status, failure.apiError)
+		perf.Outcome = performanceInvalidRequest
+		if err := writeError(w, failure.status, failure.apiError); err != nil {
+			perf.Outcome = performanceWriteError
+		}
 		return
 	}
 	// One selection at a time by default: the proposers can be asked in
 	// parallel by the fleet, but a second judge in flight halves the one
 	// accelerator the first is using and makes every latency in the trace
 	// a measurement of contention.
+	queued := time.Now()
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
 	case <-r.Context().Done():
+		perf.Outcome = performanceQueueCanceled
+		perf.CanceledPhase = performanceQueue
+		perf.QueueMS = elapsedMS(queued)
 		return
 	}
+	startedAt := time.Now().UTC()
+	perf.StartedAt = &startedAt
+	perf.QueueMS = elapsedMS(queued)
 
-	out, err := s.answer(r.Context(), req)
+	out, err := s.answer(r.Context(), req, &perf)
 	if err != nil {
 		s.opt.Log("error: %v", err)
-		writeRunError(w, err)
+		if errors.Is(r.Context().Err(), context.Canceled) || errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+			perf.Outcome = performanceExecutionCanceled
+			perf.CanceledPhase = perf.Phase
+		} else {
+			perf.Outcome = performanceRunError
+		}
+		perf.Phase = performanceWrite
+		started := time.Now()
+		if writeErr := writeRunError(w, err); writeErr != nil {
+			perf.Outcome = performanceWriteError
+		}
+		perf.WriteMS = elapsedMS(started)
+		perf.noteCancellation(r.Context())
+		perf.Phase = ""
 		return
 	}
-	writeCompletion(w, req.Stream, out)
+	if r.Context().Err() != nil {
+		perf.Outcome = performanceExecutionCanceled
+		if perf.CanceledPhase == "" {
+			perf.CanceledPhase = perf.Phase
+		}
+		return
+	}
+	started := time.Now()
+	if err := writeCompletion(w, req.Stream, out); err != nil {
+		perf.Outcome = performanceWriteError
+	}
+	perf.WriteMS = elapsedMS(started)
+	perf.Phase = performanceWrite
+	perf.noteCancellation(r.Context())
+	perf.Phase = ""
+	if perf.Outcome == performanceWriteError {
+		return
+	}
+	if perf.CanceledPhase != "" || r.Context().Err() != nil {
+		perf.Outcome = performanceExecutionCanceled
+		if perf.CanceledPhase == "" {
+			perf.CanceledPhase = performanceWrite
+		}
+	} else if out.apiErr != nil {
+		perf.Outcome = performanceSelectionError
+	} else {
+		perf.Outcome = performanceSuccess
+	}
 }
 
 type requestFailure struct {
@@ -110,14 +180,13 @@ func badRequest(message, param string) *requestFailure {
 	}
 }
 
-func writeRunError(w http.ResponseWriter, err error) {
+func writeRunError(w http.ResponseWriter, err error) error {
 	// A conversation the task refuses is the caller's mistake: clients must
 	// not retry it as a server failure.
 	if _, ok := errors.AsType[*task.ValidationError](err); ok || errors.Is(err, propose.ErrContextBudget) {
-		writeError(w, http.StatusBadRequest, apiError{Message: err.Error(), Type: "invalid_request_error", Param: "messages"})
-		return
+		return writeError(w, http.StatusBadRequest, apiError{Message: err.Error(), Type: "invalid_request_error", Param: "messages"})
 	}
-	writeError(w, http.StatusInternalServerError, apiError{Message: err.Error(), Type: "internal_error"})
+	return writeError(w, http.StatusInternalServerError, apiError{Message: err.Error(), Type: "internal_error"})
 }
 
 func conversationBytes(msgs []task.ConvMessage) int {

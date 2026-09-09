@@ -30,10 +30,11 @@ type Options struct {
 
 // Server answers /v1/models and /v1/chat/completions.
 type Server struct {
-	cfg  *config.Config
-	opt  Options
-	sem  chan struct{}
-	once sync.Once
+	cfg   *config.Config
+	opt   Options
+	sem   chan struct{}
+	once  sync.Once
+	logMu sync.Mutex
 }
 
 // New validates that cfg can serve and returns the server.
@@ -53,11 +54,18 @@ func New(cfg *config.Config, opt Options) (*Server, error) {
 	if opt.Client == nil {
 		opt.Client = &llm.Client{HTTP: &http.Client{}}
 	}
-	return &Server{
+	s := &Server{
 		cfg: cfg,
 		opt: opt,
 		sem: make(chan struct{}, cfg.Serve.MaxInflight),
-	}, nil
+	}
+	logf := s.opt.Log
+	s.opt.Log = func(format string, args ...any) {
+		s.logMu.Lock()
+		defer s.logMu.Unlock()
+		logf(format, args...)
+	}
+	return s, nil
 }
 
 // Handler is the routing table.

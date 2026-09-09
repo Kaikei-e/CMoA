@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Kaikei-e/CMoA/internal/judge"
 	"github.com/Kaikei-e/CMoA/internal/propose"
@@ -15,29 +16,49 @@ import (
 )
 
 // answer materialises a task, runs its proposers, and selects an answer.
-func (s *Server) answer(ctx context.Context, req request) (*answered, error) {
+func (s *Server) answer(ctx context.Context, req request, perf *performance) (*answered, error) {
 	id := trace.NewRunID(s.opt.Now())
+	perf.Phase = performanceTask
+	started := time.Now()
 	taskDir := filepath.Join(s.cfg.Serve.RunsDir, string(id))
 	t, err := s.writeTask(taskDir, id, req.Messages)
+	perf.TaskMS = elapsedMS(started)
+	perf.noteCancellation(ctx)
 	if err != nil {
 		return nil, err
 	}
 	s.opt.Log("%s: %d messages", id, len(req.Messages))
 
+	perf.Phase = performancePropose
+	started = time.Now()
 	dir, err := propose.Run(ctx, s.cfg, t, propose.Options{
 		AsOf: s.opt.AsOf, RunID: id, Client: s.opt.Client, Version: s.opt.Version,
 		Harness: s.opt.Harness, Log: s.opt.Log, Now: s.opt.Now,
 	})
+	perf.ProposeMS = elapsedMS(started)
+	perf.noteCancellation(ctx)
+	if dir != "" {
+		perf.RunID = string(dir.ID())
+	}
 	if err != nil {
 		return nil, err
 	}
+	perf.Phase = performanceSelect
+	started = time.Now()
 	sel, err := selection.RunChat(ctx, s.cfg, t, dir, selection.ChatOptions{
 		Client: judge.Live{Client: s.opt.Client}, Log: s.opt.Log, Now: s.opt.Now,
 	})
+	perf.SelectMS = elapsedMS(started)
+	perf.noteCancellation(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return s.respond(dir, id, sel)
+	perf.Phase = performanceRespond
+	started = time.Now()
+	out, err := s.respond(dir, id, sel)
+	perf.RespondMS = elapsedMS(started)
+	perf.noteCancellation(ctx)
+	return out, err
 }
 
 // writeTask materialises the request as a regular chat task so that a served
