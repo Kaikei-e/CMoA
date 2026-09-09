@@ -4,6 +4,14 @@
 
 **P0完了（2026-09-09、リリース前の検証）:** D-01・U-01・C-01の動作基準を確認した。[再実施手順](baseline-protocol.md)を基準にP1へ進む。P0は品質改善の採用やjudge校正の合格を示さない。
 
+**P1実装中（2026-09-09）:** chat は数値合意の誤一致を再現し、
+[一変更の開発候補](proposals/0018-decimal-only-numeric-agreement.md)を実装した。
+uzushio に匿名評価票、複数人ラベルの統合、固定 H の paired 採否評価を追加し、合成 fixture で検証した。
+code は render hash と実際の注入本文が一致するよう両 runtime/runner を修正した。
+実行中に再現した improve の相対パス不具合と、Docker 接続失敗の不合格扱いも修正・検証した。
+chat の開発・回帰 pilot と code の既存 suite による doctor/baseline pilot を実施した。
+二重 human annotation、H 評価、memory 一変更の両 split 判定、serve 採用確認は別 gate として残る。評価データ・生成器・ラベル・実行記録は非公開領域に保存し Git から除外する。
+
 目標は、**実行結果から改善候補を作り、独立した評価で採否を決め、その理由と再現条件を追跡できる開発基盤**を完成させること。直近はchatとcodingでそれぞれ一巡を成立させ、その証拠をもとに文脈選別と計算予算の最適化へ進む。
 
 これは将来の作業計画であり、acceptedなADR、仕様、autonomy、選択規則の変更そのものではない。設計を変える実装では該当repositoryに新しいADRを追加し、置換する決定を`supersedes`で示す。
@@ -58,7 +66,9 @@
 
 共通の基準記録には3 repositoryのrevisionとdirty状態、実行バイナリのdigest、DocDag/preset/schema版、suiteとsplitのdigest、modelと量子化・重み識別子、推論server版、prompt/seed/temperature、並列数、資源条件を含める。取得できない情報はunknownと書く。モデル名やtagだけで同一性を断定しない。
 
-DocDagはCMoAでv0.4.1、uzushioでv0.4.0が指定されている。まず各指定版を基準にする。uzushioをv0.4.1へ揃える作業は、生成config、lint fixtures、conformanceが同じ意味を保つことを確認する小さな互換性変更として扱う。
+P0 の基準は CMoA が DocDag v0.4.1、uzushio が v0.4.0 だった。
+P1 の開発作業で uzushio の依存と CI 指定も v0.4.1 に揃え、生成 config・lint fixture の
+内容が変わらないことと DocDag/conformance gate を確認した。P0 の保存済みバイナリと記録は保持する。
 
 ### P1-chat — 回答を選べることと、正しく選べることを測る
 
