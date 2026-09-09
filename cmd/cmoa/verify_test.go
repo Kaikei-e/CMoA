@@ -279,6 +279,18 @@ func TestVerifyRunnerError(t *testing.T) {
 	}
 }
 
+func TestVerifyDaemonPreflightError(t *testing.T) {
+	dir := verifyFixture(t, manifestV2)
+	t.Setenv("FAKE_DOCKER_INFO_EXIT", "1")
+	code, v, errb := runVerify(t, "--task", dir, "--diff", filepath.Join(dir, "fix.diff"), "--label", "no-daemon")
+	if code != exitVerifyRunner || v == nil {
+		t.Fatalf("exit %d, %+v: %s", code, v, errb)
+	}
+	if v.Status != trace.VerifyRunnerError || !strings.Contains(v.Error, "docker daemon") {
+		t.Fatalf("%+v", v)
+	}
+}
+
 // --diff - reads stdin. os.Stdin is swapped here rather than plumbed through
 // run(), which every other command would have to grow a parameter for.
 func TestVerifyDiffFromStdin(t *testing.T) {

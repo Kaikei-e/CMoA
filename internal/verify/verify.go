@@ -107,6 +107,26 @@ func (r *ComposeRunner) Run(ctx context.Context, s Spec) (*Result, error) {
 	if err != nil {
 		return nil, &RunnerError{Stage: "docker binary", Err: err}
 	}
+	// Check the daemon before handing it a candidate. A compose client's exit
+	// status cannot distinguish a verifier's failing test from an inaccessible
+	// daemon; this separate Docker command can. Do not inspect verifier stderr:
+	// a verifier is free to print any text.
+	preflightTimeout := 10 * time.Second
+	if s.Timeout > 0 && s.Timeout < preflightTimeout {
+		preflightTimeout = s.Timeout
+	}
+	preflightCtx, preflightCancel := context.WithTimeout(ctx, preflightTimeout)
+	defer preflightCancel()
+	preflight := exec.CommandContext(preflightCtx, bin, "info")
+	preflight.WaitDelay = r.KillAfter
+	if preflight.WaitDelay == 0 || preflight.WaitDelay > preflightTimeout {
+		preflight.WaitDelay = preflightTimeout
+	}
+	var preflightErr bytes.Buffer
+	preflight.Stderr = &preflightErr
+	if err := preflight.Run(); err != nil {
+		return nil, &RunnerError{Stage: "docker daemon", Stderr: preflightErr.String(), Err: err}
+	}
 	env := append(os.Environ(), EnvCandidateDir+"="+s.CandidateDir)
 	base := []string{"compose", "-f", s.ComposeFile, "-p", s.ProjectName}
 

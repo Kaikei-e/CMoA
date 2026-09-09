@@ -35,15 +35,15 @@ func TestRunPass(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 	lines := logLines(t)
-	if len(lines) != 3 {
-		t.Fatalf("want run + down + ps, got %v", lines)
+	if len(lines) != 4 {
+		t.Fatalf("want info + run + down + ps, got %v", lines)
 	}
 	want := "compose -f " + cf + " -p cmoa-t-r-c run --rm --no-deps -T --quiet-pull verify [/cand]"
-	if lines[0] != want {
-		t.Fatalf("run argv:\n got %s\nwant %s", lines[0], want)
+	if lines[0] != "info []" || lines[1] != want {
+		t.Fatalf("preflight/run argv: %v; want %s", lines, want)
 	}
-	if !strings.HasPrefix(lines[1], "compose -f "+cf+" -p cmoa-t-r-c down -v --remove-orphans") {
-		t.Fatalf("down argv: %s", lines[1])
+	if !strings.HasPrefix(lines[2], "compose -f "+cf+" -p cmoa-t-r-c down -v --remove-orphans") {
+		t.Fatalf("down argv: %s", lines[2])
 	}
 	if res.Command[0] != docker || res.Command[len(res.Command)-1] != "verify" {
 		t.Fatalf("command = %v", res.Command)
@@ -57,7 +57,7 @@ func TestRunFail(t *testing.T) {
 	if err != nil || res.ExitCode != 3 {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
-	if len(logLines(t)) != 3 {
+	if len(logLines(t)) != 4 {
 		t.Fatal("down must run after a failing candidate")
 	}
 }
@@ -73,7 +73,7 @@ func TestRunTimeout(t *testing.T) {
 	if time.Since(start) > 3*time.Second {
 		t.Fatal("timeout did not interrupt")
 	}
-	if len(logLines(t)) != 3 {
+	if len(logLines(t)) != 4 {
 		t.Fatal("down must run after a timeout")
 	}
 }
@@ -110,7 +110,43 @@ func TestLeftoverContainerIsRemoved(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := logLines(t)
-	if len(lines) != 4 || !strings.HasPrefix(lines[2], "ps -aq --filter label=com.docker.compose.project=p") || !strings.HasPrefix(lines[3], "rm -f abc123") {
+	if len(lines) != 5 || !strings.HasPrefix(lines[3], "ps -aq --filter label=com.docker.compose.project=p") || !strings.HasPrefix(lines[4], "rm -f abc123") {
 		t.Fatalf("expected ps + rm -f after down, got %v", lines)
+	}
+}
+
+func TestDaemonPreflightFailureIsRunnerError(t *testing.T) {
+	docker, cf := fake(t)
+	t.Setenv("FAKE_DOCKER_INFO_EXIT", "1")
+	_, err := (&ComposeRunner{Docker: docker}).Run(context.Background(), Spec{ComposeFile: cf, Service: "verify", ProjectName: "p"})
+	var runner *RunnerError
+	if !errors.As(err, &runner) || runner.Stage != "docker daemon" || !strings.Contains(runner.Stderr, "permission denied") {
+		t.Fatalf("daemon preflight error = %#v", err)
+	}
+	if lines := logLines(t); len(lines) != 1 || lines[0] != "info []" {
+		t.Fatalf("preflight should not run workload: %v", lines)
+	}
+}
+
+func TestDaemonPreflightTimeoutIsRunnerError(t *testing.T) {
+	docker, cf := fake(t)
+	t.Setenv("FAKE_DOCKER_INFO_SLEEP", "1")
+	start := time.Now()
+	_, err := (&ComposeRunner{Docker: docker, KillAfter: 20 * time.Millisecond}).Run(context.Background(), Spec{ComposeFile: cf, Service: "verify", ProjectName: "p", Timeout: 20 * time.Millisecond})
+	var runner *RunnerError
+	if !errors.As(err, &runner) || runner.Stage != "docker daemon" {
+		t.Fatalf("preflight timeout = %#v", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("preflight ignored Spec.Timeout")
+	}
+}
+
+func TestWorkloadPermissionTextIsStillVerifierFailure(t *testing.T) {
+	docker, cf := fake(t)
+	t.Setenv("FAKE_DOCKER_WORKLOAD_PERMISSION", "1")
+	res, err := (&ComposeRunner{Docker: docker}).Run(context.Background(), Spec{ComposeFile: cf, Service: "verify", ProjectName: "p"})
+	if err != nil || res.ExitCode != 1 || !strings.Contains(string(res.Stderr), "permission denied") {
+		t.Fatalf("workload result=%+v err=%v", res, err)
 	}
 }

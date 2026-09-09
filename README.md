@@ -115,6 +115,8 @@ Task formats remain backward compatible:
 
 `verify` supports exit-code and band-CSV verifiers; coding `select` supports
 exit-code verifiers only. An empty reference diff verifies the revision unchanged.
+Docker daemon access is checked before starting the verifier; a failed check is
+reported as `runner_error`, not a candidate failure.
 CMoA verifies individual diffs; mutant generation and verifier-quality evaluation
 belong to the layer above. Start with the [coding example](examples/task-hello/README.md)
 or [chat example](examples/task-chat-hello/README.md).

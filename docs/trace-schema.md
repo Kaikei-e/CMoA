@@ -214,6 +214,11 @@ unchanged, which is how a task's seed state is shown to fail — and, when the
 task's `reference.diff` is itself empty, how a reference solution that *is*
 the tree at `rev` is verified.
 
+The Compose runner checks Docker daemon access before starting a verifier.
+A failed daemon check is `runner_error`; candidate stderr text is not used to
+infer a daemon failure. This preflight does not classify every failure that
+can occur after a verifier starts.
+
 ### band verifiers
 
 A task whose `task.json` sets `verify.kind: band` is judged on what the

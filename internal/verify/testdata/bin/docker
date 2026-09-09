@@ -2,13 +2,14 @@
 # Fake docker for tests: logs argv and CMOA_CANDIDATE_DIR, exits per FAKE_DOCKER_EXIT.
 echo "$* [$CMOA_CANDIDATE_DIR]" >> "${FAKE_DOCKER_LOG:?}"
 case "$1" in
+  info) if [ -n "$FAKE_DOCKER_INFO_SLEEP" ]; then sleep "$FAKE_DOCKER_INFO_SLEEP"; fi; if [ -n "$FAKE_DOCKER_INFO_EXIT" ]; then echo 'permission denied while trying to connect to the docker API' >&2; fi; exit "${FAKE_DOCKER_INFO_EXIT:-0}" ;;
   ps) if [ -n "$FAKE_DOCKER_LEFTOVER" ]; then echo "abc123"; fi; exit 0 ;;
   rm) exit 0 ;;
 esac
 for a in "$@"; do
   case "$a" in
     down) exit 0 ;;
-    run) ;;
+    run) if [ -n "$FAKE_DOCKER_WORKLOAD_PERMISSION" ]; then echo 'permission denied while trying to connect to the docker API' >&2; exit 1; fi ;;
   esac
 done
 if [ -n "$FAKE_DOCKER_SLEEP" ]; then sleep "$FAKE_DOCKER_SLEEP"; fi
