@@ -1,16 +1,17 @@
 # uzushio・CMoA・DocDag 共同ロードマップ
 
-更新日: 2026-09-09。3プロジェクトの実装と公開研究を調べ直し、今後の優先順位を再策定した。[調査記録](evolution-research-2026-09-09.md)にソース、一次資料、適用限界をまとめる。この文書を共同計画の参照先とし、プロジェクト別の実装・仕様・採否は各repositoryに記録する。
+更新日: 2026-09-10。3プロジェクトの実装と公開研究を調べ直し、今後の優先順位を再策定した。[調査記録](evolution-research-2026-09-09.md)にソース、一次資料、適用限界をまとめる。この文書を共同計画の参照先とし、プロジェクト別の実装・仕様・採否は各repositoryに記録する。
 
 **P0完了（2026-09-09、リリース前の検証）:** D-01・U-01・C-01の動作基準を確認した。[再実施手順](baseline-protocol.md)を基準にP1へ進む。P0は品質改善の採用やjudge校正の合格を示さない。
 
-**P1実装中（2026-09-09）:** chat は数値合意の誤一致を再現し、
-[一変更の開発候補](proposals/0018-decimal-only-numeric-agreement.md)を実装した。
-uzushio に匿名評価票、複数人ラベルの統合、固定 H の paired 採否評価を追加し、合成 fixture で検証した。
-code は render hash と実際の注入本文が一致するよう両 runtime/runner を修正した。
-実行中に再現した improve の相対パス不具合と、Docker 接続失敗の不合格扱いも修正・検証した。
-chat の開発・回帰 pilot と code の既存 suite による doctor/baseline pilot を実施した。
-二重 human annotation、H 評価、memory 一変更の両 split 判定、serve 採用確認は別 gate として残る。評価データ・生成器・ラベル・実行記録は非公開領域に保存し Git から除外する。
+**P1進行中（2026-09-10）:** P1-chat と P1-code の改修、通常検証、実モデルでの pilot を実施した。両項目とも採用 gate は未完了で、改善の採用は記録していない。
+
+| 項目 | 実装・実行した範囲 | 完了までに残る確認 |
+| --- | --- | --- |
+| P1-chat | [数値合意の開発候補](proposals/0018-decimal-only-numeric-agreement.md)、匿名評価票・人手ラベル統合・固定 H 評価を実装。D/R の fresh 診断を実施 | 人手ラベルを用いた D/R 品質評価と finalist 固定、事前規則に基づく未使用 H 評価、採用可能な候補の serve 確認 |
+| P1-code | 注入本文と render hash の整合、improve の相対パス、Docker 接続失敗の分類を修正。対象 suite の doctor、held-in からの memory 一変更の提案と部分的な paired 比較を実施 | 打ち切りを未測定として保持し、両 split の既存 gate による採否を一巡記録する |
+
+評価データ・生成器・ラベル・実行記録は非公開領域に保存し Git から除外する。個別の測定結果や実行環境の識別情報はこの公開文書に掲載しない。
 
 目標は、**実行結果から改善候補を作り、独立した評価で採否を決め、その理由と再現条件を追跡できる開発基盤**を完成させること。直近はchatとcodingでそれぞれ一巡を成立させ、その証拠をもとに文脈選別と計算予算の最適化へ進む。
 
@@ -32,10 +33,11 @@ chat の開発・回帰 pilot と code の既存 suite による doctor/baseline
 
 | 項目 | 実装の状態 | 証拠の状態と残る仕事 |
 | --- | --- | --- |
-| coding runtime、verify、task doctor/mutate/calibrate | 実装済み | 実際に使うsuiteの健全性と環境を固定する |
-| render、improve、paired run、逐次判定 | 実装済み | 共有可能な一つのharness変更について、両splitの採否を一巡記録する |
+| coding runtime、verify、task doctor/mutate/calibrate | 実装済み | 対象suiteのdoctorを実施。環境の来歴を保持し、次回実行で再確認する |
+| render、improve、paired run、逐次判定 | 実装済み・部分実証 | memory一変更を部分比較。両splitの採否を一巡記録する作業が残る |
 | chatのconsensus/Copeland、単一blind judge、serve | 実装済み | 選択カバレッジ、judge校正、fresh品質を分けて評価する |
 | judge replay、D/R/Hを分離するbudgeted trial | 実装済み | replayとfreshを区別し、finalistから採用までの証拠を完成させる |
+| 匿名評価票、人手ラベル統合、固定Hのpaired評価 | 実装済み・合成fixtureで検証 | 実データの人手評価と未使用Hでの採否は未実施 |
 | serve性能ログ、trial再開fingerprint、コンテナ起動経路 | リリース前の検証済み | Go/monitor/Compose checksと再開動作を確認。リリース状態は各repositoryで管理 |
 | DocDagのpublic config、lint、期間、append-only、context | 実装済み | 自身の6 ADRに本文を保持してfrontmatter追加。binding 6件、自己corpus CIを整備 |
 | 3層共通の実行条件と採否を結ぶ証拠bundle | 部品は存在 | バイナリ・モデル・入力・render・評価・採否をまとめて再検証する契約は今後の仕事 |
@@ -82,7 +84,7 @@ P1 の開発作業で uzushio の依存と CI 指定も v0.4.1 に揃え、生�
 
 速度比較では実行順をcounterbalanceし、キャッシュとwarm/coldの扱いを先に決める。同条件でも生じる順序依存の時間差を、変更による速度改善と見なさない。
 
-現行`judge trial`の`finalist`は点推定に基づく探索上の推奨であり、非劣性の統計的証明ではない。Hでの区間付き採用評価はuzushioの明示的な追加作業とする。固定標本のpaired評価を初期案とし、taskをcluster単位に扱う。必要な標本数はDの変動と狙う効果から先に設計し、Hを見て許容幅を広げない。
+現行`judge trial`の`finalist`は点推定に基づく探索上の推奨であり、非劣性の統計的証明ではない。uzushioの`judge assess`に固定標本のpaired評価と区間付きの採否を実装したが、未使用Hでの採用評価は未実施である。taskをcluster単位に扱う。必要な標本数はDの変動と狙う効果から先に設計し、Hを見て許容幅を広げない。
 
 judge単体の校正とselector全体の評価は別成果物にする。`binding`なuncalibrated記録を校正合格と解釈しない。校正規則自体を変える場合はuzushioの仕様・適合性テストを更新する。採用した選択規則の変更はCMoA ADR 0013のsupersessionとして記録する。
 
@@ -131,19 +133,19 @@ poolでは`β = P(全候補が失敗)`、少なくとも一つ正解がある割
 
 探索は[GEPA](https://arxiv.org/abs/2507.19457)と[Self-Harness](https://arxiv.org/html/2606.09498v3)を比較対象にする。最初は候補数・評価費用・変更surfaceを制限し、既存runと採用規則を使う。自動採用権限の拡大は別ADRと評価を要する。
 
-## 着手できる作業単位
+## 作業単位と進捗
 
 各行は一つのレビュー可能な成果物にまとめる。IDはこの計画用であり、既存の仕様IDや新CLI名ではない。
 
-| ID | 優先 | repository | 成果物 | 依存・検証 |
+| ID | 優先・進捗 | repository | 成果物 | 依存・検証 |
 | --- | --- | --- | --- | --- |
 | D-01 | P0 完了 | DocDag | 自己ADRのmetadata移行、corpus設定、CI | 本文保持、binding 6件、validate/lint成功 |
 | U-01 | P0 完了 | uzushio | 既存trial再開の確定とfresh A/A記録 | 変更拒否、予算延長での完走、journal保持を確認 |
 | C-01 | P0 完了 | CMoA | 既存serve計測・起動経路の確定 | Go/monitor/Compose checks成功、request ID中継修正 |
-| U-02 | P1 次着手 | uzushio | 代表D・回帰R・未使用Hのmanifestとラベル手順 | P0の既存prefixを基準に、重複・由来・strata・開封履歴を検証 |
-| C-02 | P1 | CMoA | 合意・tie-breakの失敗再現と一変更 | 合成fixture、replay、規則変更時はADR 0013をsupersede |
-| U-03 | P1 | uzushio | chat finalistの固定標本・paired採用評価 | 点推定と区間を分離、Hの事前規則、D/Rとの非混在 |
-| U-04 | P1 | uzushio | memory一変更のdoctor/improve/run/render実証 | 両splitの既存gate、却下/保留も記録、CMoAとのhash一致 |
+| U-02 | P1 基盤実装済み・データ準備継続 | uzushio | 代表D・回帰R・未使用Hのmanifestとラベル手順 | P0の既存prefixを基準に、重複・由来・strata・開封履歴を検証 |
+| C-02 | P1 候補実装済み・評価継続 | CMoA | 合意・tie-breakの失敗再現と一変更 | 合成fixture、replay、規則変更時はADR 0013をsupersede |
+| U-03 | P1 実装済み・H未評価 | uzushio | chat finalistの固定標本・paired採用評価 | 点推定と区間を分離、Hの事前規則、D/Rとの非混在 |
+| U-04 | P1 部分実証・未完了 | uzushio | memory一変更のdoctor/improve/run/render実証 | 両splitの既存gate、却下/保留も記録、CMoAとのhash一致 |
 | U-05 | P2 | uzushio | 評価bundleと検証、H利用履歴、baseline復元例 | 改変・欠落・期限切れ・条件不一致のfixture |
 | D-02 | P2 | DocDag + uzushio | 証拠関係を表す設定とlint fixtures | まずuzushioの設定生成で実装。エンジン変更は必要性が判明した場合 |
 | U-06 | P3 | uzushio + CMoA | 単体/pool/context/限定探索の比較記録 | 同じ費用枠、別の監査set、採用を伴う変更は各所有層へ |
