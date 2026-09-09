@@ -132,6 +132,11 @@ byte-identical answers use the lowest candidate id. Malformed output, timeouts
 and endpoint failures are tracked separately from measured draws. Malformed
 judge output gets one retry.
 
+The P1 development candidate uses `nfkc-v2`: numeric agreement requires the
+whole normalised answer to be a decimal literal. Its quality and latency
+adoption gates are still pending; see [proposed ADR 0018](docs/proposals/0018-decimal-only-numeric-agreement.md).
+This working build is an evaluation candidate, not a recorded deployment decision.
+
 Candidates are labelled A/B, sanitised and fenced; injection-shaped text is
 flagged in the trace. The [selection decision](docs/adr/0013-consensus-then-copeland-for-chat-selection.md)
 and [trace schema](docs/trace-schema.md) describe the detailed rules and outcomes.

@@ -42,32 +42,32 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
-// The last number is the answer, and two spellings of one quantity are one
-// number.
-func TestLastNumber(t *testing.T) {
+func TestNumericAnswer(t *testing.T) {
 	for _, tc := range []struct {
-		in   string
-		want string
-		ok   bool
+		in, want string
+		ok       bool
 	}{
-		{"1 + 100 = 101", "101", true},
-		{"answer: 276,416", "276416", true},
-		{"答えは 276、416 です", "276416", true},
+		{"276,416", "276416", true},
 		{"3.50", "3.5", true},
-		{"3、000円", "3000", true},
-		{"候補は 1、2、3 です", "3", true},
-		{"1,2345 is not grouped", "2345", true},
-		{"1e5", "1e5", true},
-		{"2.5e-3", "2.5e-3", true},
 		{"007", "7", true},
-		{"the balance is -99", "-99", true},
-		{"utf-8 is a name, 3 is a number", "3", true},
-		{"no digits here", "", false},
+		{"-003.50", "-3.5", true},
+		{"-0.00", "0", true},
+		{"1,234,567", "1234567", true},
+		{"1234,567", "", false},
+		{"1,2345", "", false},
+		{"1e5", "", false},
+		{"2.5e-3", "", false},
+		{"3、000", "", false},
+		{"+3", "", false},
+		{".3", "", false},
+		{"3 kg", "", false},
+		{strings.Repeat("1", maxNumericRunes), strings.Repeat("1", maxNumericRunes), true},
+		{strings.Repeat("1", maxNumericRunes+1), "", false},
 	} {
 		t.Run(tc.in, func(t *testing.T) {
-			got, ok := lastNumber(Normalize(tc.in))
+			got, ok := numericAnswer(tc.in)
 			if ok != tc.ok || got != tc.want {
-				t.Errorf("lastNumber(%q) = %q, %v; want %q, %v", tc.in, got, ok, tc.want, tc.ok)
+				t.Errorf("numericAnswer(%q) = %q, %v; want %q, %v", tc.in, got, ok, tc.want, tc.ok)
 			}
 		})
 	}
@@ -83,20 +83,20 @@ func TestAgree(t *testing.T) {
 		want       bool
 	}{
 		{name: "the same text", a: "101です。", b: "**１０１です**", how: trace.AgreementExact, want: true},
-		{name: "the same number, different words", a: "101です。", b: "1 + 100 = 101", how: trace.AgreementNumeric, want: true},
-		{name: "separators do not matter", a: "答え: 276,416", b: "276416", how: trace.AgreementNumeric, want: true},
+		{name: "the same number, different words", a: "101です。", b: "1 + 100 = 101"},
+		{name: "separators do not matter", a: "276,416", b: "276416", how: trace.AgreementNumeric, want: true},
 		{name: "different numbers", a: "101", b: "102"},
 		{name: "no number at all", a: "青いから", b: "赤いから"},
 		{name: "an enumeration is not a number", a: "1. りんご 2. みかん 3. ぶどう", b: "1. 犬 2. 猫 3. 鳥"},
 		{name: "a comma-separated list is not one number", a: "候補は 1、2、3 です", b: "123 です"},
-		{name: "but a grouped thousand is", a: "3、000円", b: "3000円", how: trace.AgreementNumeric, want: true},
+		{name: "but a grouped thousand is", a: "3、000円", b: "3000円"},
 		{name: "an exponent is not its mantissa's tail", a: "1e5", b: "答えは5"},
 		{name: "nor is it the number it stands for", a: "1e5", b: "100000"},
 		{name: "a negation is not the same answer", a: "3つあります。", b: "3つではありません"},
 		{name: "yes is not no", a: "はい、答えは長さ0のスライスです", b: "いいえ、それは長さ0のスライスではありません"},
-		{name: "two denials still agree", a: "3つはありません", b: "3つではない", how: trace.AgreementNumeric, want: true},
+		{name: "two denials still agree", a: "3つはありません", b: "3つではない"},
 		{name: "an identifier is not another identifier", a: "the field is user_id", b: "the field is userid"},
-		{name: "knowing is not denying", a: "i know it is 5", b: "the answer is 5", how: trace.AgreementNumeric, want: true},
+		{name: "knowing is not denying", a: "i know it is 5", b: "the answer is 5"},
 		{name: "prose that happens to end in the same figure", a: long, b: "101"},
 		{name: "two empty answers agree on nothing", a: "", b: ""},
 	} {
@@ -115,8 +115,8 @@ func TestConsensusSkipsTheJudge(t *testing.T) {
 	f := &fakeJudge{t: t, script: map[order]string{}}
 	j, dir := fixture(t, f)
 	rep, err := j.Run(t.Context(), answers(
-		"granite", "1 + 100 = **101**",
-		"qwen", "１０１です。",
+		"granite", "**00101.00**",
+		"qwen", "１０１。",
 		"gemma", "たぶん 55 でしょう",
 	))
 	if err != nil {
@@ -193,7 +193,7 @@ func TestTieBreak(t *testing.T) {
 	}{
 		{
 			name: "the most central answer wins", among: []string{"a", "b"},
-			norm:   map[string]string{"a": "101", "b": "42", "c": "the answer is 101"},
+			norm:   map[string]string{"a": "101", "b": "42", "c": "101.0"},
 			chosen: "a", key: trace.TieBreakConsensus,
 		},
 		{
@@ -355,7 +355,7 @@ func TestPermutationInvariance(t *testing.T) {
 // The consensus stage is order-invariant too: which member of the group is
 // returned cannot depend on which proposer happened to be asked first.
 func TestConsensusIsOrderInvariant(t *testing.T) {
-	answers := map[string]string{"a": "1 + 100 = 101", "b": "１０１です。", "c": "たぶん 55"}
+	answers := map[string]string{"a": "00101.00", "b": "１０１。", "c": "たぶん 55"}
 	var want string
 	for _, ids := range permutations([]string{"a", "b", "c"}) {
 		tx := Texts{}

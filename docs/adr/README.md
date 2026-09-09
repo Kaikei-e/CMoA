@@ -1,6 +1,7 @@
 # Architecture decision records
 
-Seventeen records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
+Seventeen accepted or historical records stand behind CMoA. The P1 proposal 0018
+is kept outside this corpus until adoption. These are the reasoning; the code under `internal/` and the
 trace schema in [../trace-schema.md](../trace-schema.md) are what the binary does, so a record is
 read for *why* a flag, a status name or a file exists, and the code for what it accepts today.
 Records 0002 onward are written in Japanese, the language they were argued in.
@@ -18,7 +19,8 @@ selects, listens or observes.
 0003 through 0008 each take one of the four responsibilities CMoA owns and settle it; they depend on
 0002 and, where noted, on each other, and can otherwise be read in any order.
 
-Every record is **Accepted** except 0002, which 0009 superseded on 2026-09-05, 0009, which 0011 superseded on 2026-09-06,
+0018 is **Proposed** and does not replace the current binding 0013 until its adoption gates pass.
+Every other record is **Accepted** except 0002, which 0009 superseded on 2026-09-05, 0009, which 0011 superseded on 2026-09-06,
 0011, which 0013 superseded the same day, 0014, which 0015 superseded on 2026-09-08, 0015, which 0016 superseded the same day, and 0016, which 0017 superseded the same day. A decision that
 replaces one of these declares `supersedes:` in its frontmatter and moves the old record's status to
 `superseded`; nobody edits an accepted record to change what it decided. `docdag validate` is the
@@ -215,3 +217,9 @@ Cursor auto-forwards ports that listen on `0.0.0.0`, not loopback-only publishes
 `host.docker.internal` does not reach processes bound to the host's `127.0.0.1`. Both
 containers use the host network; the monitor binds `0.0.0.0:3999` so Cursor can forward
 it, and `cmoa serve` stays on loopback. Supersedes 0016.
+
+## [0018 — decimal-only numeric agreement](../proposals/0018-decimal-only-numeric-agreement.md) — proposed
+
+The P1 development candidate restricts numeric agreement to a whole decimal
+answer and versions both consensus and centrality diagnostics. Fresh D/R,
+unused H and serve adoption checks remain pending; 0013 is still binding.

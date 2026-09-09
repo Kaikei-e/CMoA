@@ -206,7 +206,7 @@ func TestRunChatNoCandidate(t *testing.T) {
 // Two proposers that say the same thing are an answer, and no judge call is
 // spent on it.
 func TestRunChatConsensus(t *testing.T) {
-	tk, dir := chatRun(t, map[string]string{"a": "**101** です。", "b": "1 + 100 = 101"})
+	tk, dir := chatRun(t, map[string]string{"a": "**00101.00**", "b": "１０１。"})
 	var calls atomic.Int32
 	s := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
 	t.Cleanup(s.Close)

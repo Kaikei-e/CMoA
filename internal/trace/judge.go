@@ -6,8 +6,11 @@ import (
 )
 
 type JudgeReport struct {
-	SchemaVersion int            `json:"schema_version"`
-	RunID         RunID          `json:"run_id"`
+	SchemaVersion int   `json:"schema_version"`
+	RunID         RunID `json:"run_id"`
+	// Normalisation versions both consensus and tie-break agreement.
+	// Older reports may only record it inside Consensus, or omit it.
+	Normalisation string         `json:"normalisation,omitempty"`
 	Judge         JudgeParams    `json:"judge"`
 	Candidates    []string       `json:"candidates"`   // in the order the caller gave them
 	Presentation  Presentation   `json:"presentation"` // how they were shown to the judge

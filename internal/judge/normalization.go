@@ -5,21 +5,18 @@ import (
 	"unicode"
 )
 
-// Normalisation is the version word written into judge.json's consensus
+// Normalisation is the version word written into judge.json and its consensus
 // block. It is a version, not a description: a trace says which normaliser
 // produced its groups, so a later one can be told from this one instead of
 // being compared with it silently.
-const Normalisation = "nfkc-v1"
+const Normalisation = "nfkc-v2"
 
-// maxNumericRunes is how long a normalised answer may be and still be
-// compared by its last number. Beyond it an answer is prose that happens to
-// hold a figure, and two essays agreeing on one number is not agreement.
+// maxNumericRunes bounds the decimal literal accepted for numeric agreement.
 const maxNumericRunes = 160
 
 // Normalize folds one answer down to the text two candidates are compared
-// on. It is deliberately conservative and deliberately cheap: it must never
-// make two different answers look the same, and it reads nothing but the
-// answer — not the question, not a reference.
+// on. These formatting heuristics read only the answer, not the question
+// or a reference; matching text does not establish correctness.
 //
 // The passes, in order:
 //

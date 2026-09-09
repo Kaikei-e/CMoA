@@ -506,7 +506,7 @@ func TestNoCandidateIs502(t *testing.T) {
 // call, and a consensus block that says how they agreed — in counts, not in
 // proposer ids.
 func TestConsensusIs200(t *testing.T) {
-	h, _ := server(t, &fleet{t: t, answer: "**101** です。", other: "1 + 100 = 101", wants: "nothing"})
+	h, _ := server(t, &fleet{t: t, answer: "**00101.00**", other: "１０１。", wants: "nothing"})
 	w := post(t, h, ask)
 	if w.Code != http.StatusOK {
 		t.Fatalf("%d: %s", w.Code, w.Body)

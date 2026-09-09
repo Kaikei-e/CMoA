@@ -149,6 +149,7 @@ func (j *Judge) newReport(in Input) *trace.JudgeReport {
 	return &trace.JudgeReport{
 		SchemaVersion: trace.SchemaVersion,
 		RunID:         in.RunID,
+		Normalisation: Normalisation,
 		Judge: trace.JudgeParams{
 			Model: j.Cfg.Model, BaseURL: j.Cfg.BaseURL, Temperature: *j.Cfg.Temperature,
 			Seed: j.Cfg.Seed, MaxTokens: j.Cfg.MaxTokens, OutputFormat: string(j.Cfg.OutputFormat),

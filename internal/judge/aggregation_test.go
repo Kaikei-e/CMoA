@@ -55,8 +55,8 @@ func TestAggregate(t *testing.T) {
 			reason: "copeland tie, score 1.5 of 2, tie broken by hash among [a b]",
 		},
 		{
-			// The same top set, with answers: a and b say the same number,
-			// so centrality cannot part them and the shorter one wins.
+			// The same top set, with answers: neither earns centrality
+			// credit, so the shorter one wins.
 			name: "a top set is parted by the shortest answer",
 			pairs: []trace.JudgePair{
 				pair("a", "b", ok(trace.ChoiceA), ok(trace.ChoiceA)),
@@ -68,15 +68,15 @@ func TestAggregate(t *testing.T) {
 			reason: "copeland tie, score 1.5 of 2, tie broken by length among [a b]",
 		},
 		{
-			// c agrees with nobody and is not in the top set; a agrees with
-			// it, so a is the more central of the two that are tied.
+			// c is not in the top set; a agrees with it, so a is the
+			// more central of the two that are tied.
 			name: "a top set is parted by agreement with the rest of the run",
 			pairs: []trace.JudgePair{
 				pair("a", "b", ok(trace.ChoiceA), ok(trace.ChoiceA)),
 				pair("a", "c", ok(trace.ChoiceA), ok(trace.ChoiceB)),
 				pair("b", "c", ok(trace.ChoiceA), ok(trace.ChoiceB)),
 			},
-			norm: map[string]string{"a": "the answer is 101", "b": "42", "c": "101"},
+			norm: map[string]string{"a": "101.0", "b": "42", "c": "101"},
 			kind: trace.SelectionSelected, id: "a", key: trace.TieBreakConsensus,
 		},
 		{

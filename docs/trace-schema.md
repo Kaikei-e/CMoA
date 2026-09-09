@@ -326,31 +326,19 @@ is a marker only at a line start or after a space, and only when what
 follows it is neither a digit nor nothing: `101.` is an answer, `1.101` is
 one decimal number, `1. 答え` is an item.
 
-Two normalised answers **agree** when they are the same text, or when all
-of the following hold: both are at most 160 runes long, both contain a
-number, their last numbers are equal, **and both either deny something or
-neither does**. The last number is the answer, because a worked calculation
-states its operands first and its result last; the length bound keeps two
-essays that happen to share a figure from counting as agreement.
+In the P1 development candidate (`nfkc-v2`), two normalised answers **agree**
+when they are the same nonempty text, or when both entire answers are decimal
+literals of at most 160 ASCII characters with the same value. A leading minus
+is allowed; thousands separators must be ASCII commas in groups of three.
+Valueless zeros are dropped using string arithmetic, with no floating-point
+rounding. Units, prose, fractions, exponents and Japanese commas do not receive
+numeric agreement. Unsupported spellings can still match as exact text.
 
-Three rules keep "the last number" from being read too generously:
-
-- **A negation guard.** `3つあります` and `3つではありません` are both short
-  and both end in the same number. Without the guard they were the same
-  answer, at zero judge calls. A small list of negation forms is matched —
-  Japanese ones as substrings, English ones as whole words so `no` does not
-  fire inside `know` — and the two answers must agree about it. The list
-  will miss forms; a missed negation and a spurious one both cost an
-  agreement, so both directions of error fall back on asking the judge.
-- **A separator has a shape.** A `,` or `、` groups thousands only with a
-  digit before it and exactly three digits after it and no fourth, because
-  `、` is also the ordinary Japanese comma: `276,416` is one number, and
-  `候補は 1、2、3 です` is three.
-- **An exponent is one token, kept verbatim.** `1e5` is neither `5` nor
-  `100000`. The miss is safe; the false agreement would not be.
-
-Valueless zeros are dropped, so `276,416`, `276416` and `276416.0` are one
-number. Neither test reads the question or the reference answer.
+Older `nfkc-v1` traces used the last number in answers up to 160 runes with a
+shared negation flag. That rule can join different units or fractions. The
+proposed change and its pending adoption gates are in
+[proposal 0018](proposals/0018-decimal-only-numeric-agreement.md).
+Neither text nor numeric agreement establishes correctness.
 
 If a **strict majority** of the candidates mutually agree, one of them is
 selected — which one is the tie-break chain below — and **not one judge
@@ -362,10 +350,12 @@ The normalisation is hand-rolled, not a real Unicode NFKC: CMoA declares no
 dependencies and the standard library has no normaliser. It covers the
 forms a local model actually emits — the full-width ASCII block and the
 ideographic space — and half-width katakana, circled digits and the rest
-are not folded. It errs toward missing an agreement, never toward inventing
-one; a missed agreement only costs the six calls stage 2 would have made
-anyway. `consensus.normalisation` names the version (`nfkc-v1`) so a trace
-written under one normaliser is not silently compared with another.
+are not folded. Formatting heuristics can still erase meaningful distinctions;
+this candidate changes numeric agreement only. The top-level optional
+`normalisation` field names the rule version on every path, including a
+centrality tie-break. `consensus.normalisation` also records it when consensus
+fires. New candidate traces use `nfkc-v2`; old traces may have only the nested
+`nfkc-v1` field or neither field. Absence must not be interpreted as `nfkc-v2`.
 
 **Stage 2, the Copeland score.** Three candidates make three pairs; each
 pair is asked in both orders, so a selection is six calls. A pair is won
@@ -558,7 +548,7 @@ Two optional blocks say how a close run was settled. `consensus` is present
 "wins": {"p1": 0, "p2": 0, "p3": 0},
 "scores": {"p1": 0, "p2": 0, "p3": 0},
 "consensus": {
-  "normalisation": "nfkc-v1",
+  "normalisation": "nfkc-v2",
   "groups": [["p1", "p2"], ["p3"]],
   "chosen": "p2",
   "agreement": "numeric"

@@ -160,6 +160,79 @@ func TestReplayOfAConsensusRunAsksNothing(t *testing.T) {
 	}
 }
 
+// A legacy numeric consensus can have no call files at all. When a later
+// normaliser correctly rejects that agreement, replay must not recreate an
+// answer from the old verdict or reach a live server: the needed calls are
+// absent, so the replay is an explicitly failed measurement.
+func TestReplayLegacyFalseNumericConsensusFailsWithoutInventingCalls(t *testing.T) {
+	f := &fakeJudge{t: t, script: map[order]string{}}
+	j, src := fixture(t, f)
+	legacyInput := input("a", "b", "c")
+	for i := range legacyInput.Candidates {
+		legacyInput.Candidates[i].Answer = "3 m"
+	}
+	legacy, err := j.Run(context.Background(), legacyInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Consensus == nil || len(legacy.Pairs) != 0 || f.calls.Load() != 0 {
+		t.Fatalf("fixture must be a zero-call consensus: %+v, calls=%d", legacy, f.calls.Load())
+	}
+	// A v1 trace recorded two answers as agreeing because it extracted their
+	// trailing number. The trace intentionally has no call files to replay.
+	legacy.Normalisation = "nfkc-v1"
+	legacy.Consensus = &trace.Consensus{
+		Normalisation: "nfkc-v1", Groups: [][]string{{"a", "c"}, {"b"}},
+		Chosen: "a", Agreement: trace.AgreementNumeric,
+	}
+	legacy.TieBreak = &trace.TieBreak{Among: []string{"a", "c"}, Key: trace.TieBreakConsensus, Chosen: "a"}
+	if err := os.Remove(src.JudgeFile()); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.WriteJudge(legacy); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshot(t, string(src))
+
+	replayer, err := OpenReplay(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replayer.Record().Calls) != 0 {
+		t.Fatalf("legacy consensus has %d recorded calls", len(replayer.Record().Calls))
+	}
+	current := input("a", "b", "c")
+	current.Candidates[0].Answer = "3 kilograms"
+	current.Candidates[1].Answer = "2 m"
+	current.Candidates[2].Answer = "3 m"
+	seed := replayer.Seed()
+	current.Seed = &seed
+	dst := trace.Dir(t.TempDir())
+	got, err := (&Judge{Cfg: replayer.Params(j.Cfg), Client: replayer, Dir: dst}).Run(context.Background(), current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.calls.Load() != 0 {
+		t.Fatalf("replay contacted the source server %d time(s)", f.calls.Load())
+	}
+	if got.Consensus != nil || got.Outcome.Kind != trace.SelectionJudgeFailed {
+		t.Fatalf("replay outcome = %+v, consensus = %+v; want judge_failed without consensus", got.Outcome, got.Consensus)
+	}
+	if len(got.Pairs) != 3 {
+		t.Fatalf("replay planned %d pairs, want 3", len(got.Pairs))
+	}
+	for _, pair := range got.Pairs {
+		for _, order := range pair.Orders {
+			if order.Status != trace.JudgeCallError || order.Choice != "" || order.ChoiceCandidate != "" {
+				t.Fatalf("replay invented a verdict in %+v", order)
+			}
+		}
+	}
+	if diff := diffSnapshots(before, snapshot(t, string(src))); diff != "" {
+		t.Fatalf("replay changed its legacy source: %s", diff)
+	}
+}
+
 // What a replayer does with a call it has no record of. Both are refusals
 // rather than silence: a run that quietly invented an answer would be
 // indistinguishable from one that read a good record.
