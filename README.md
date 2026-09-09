@@ -13,7 +13,9 @@ answer.
 CMoA uses [DocDag](https://github.com/Kaikei-e/DocDag) through read-only commands
 to record the specification a run read. [uzushio](https://github.com/Kaikei-e/uzushio)
 builds evaluation and harness-improvement workflows on CMoA; CMoA does not depend
-on it. See the [roadmap](docs/roadmap.md) for scope and status.
+on it. See the [joint roadmap](docs/roadmap.md) for the three projects' priorities,
+ownership and adoption gates, and the [research review](docs/evolution-research-2026-09-09.md)
+for the source analysis and supporting evidence.
 
 ## Build and configure
 
