@@ -150,6 +150,8 @@ and [trace schema](docs/trace-schema.md) describe the detailed rules and outcome
 in path order, and `skills/<name>/SKILL.md` supplies names and descriptions.
 Skill bodies are not executed or loaded into prompts. Harness input is validated,
 its tree digest is recorded, and proposer context budgets include its content.
+The digest and injected text use the same file bytes, even if a file is replaced
+while the harness is loading. The evaluation runner checks that digest before selection.
 An empty directory is equivalent to no harness; `--harness ""` is an error.
 See the [harness contract](docs/adr/0010-harness-directory.md).
 

@@ -77,6 +77,18 @@ var skillNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 // Load reads dir. A directory holding none of the three surfaces is valid
 // and renders the prompt a run without a harness renders.
 func Load(dir string) (*Dir, error) {
+	return load(dir, os.ReadFile)
+}
+
+// scannedFile is one read of a harness file. Keeping its bytes alongside the
+// public manifest entry makes the digest and the rendered prompt a snapshot
+// of the same tree, even if a renderer replaces a file while Load is running.
+type scannedFile struct {
+	File
+	body []byte
+}
+
+func load(dir string, readFile func(string) ([]byte, error)) (*Dir, error) {
 	st, err := os.Stat(dir)
 	if err != nil || !st.IsDir() {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, dir)
@@ -84,13 +96,17 @@ func Load(dir string) (*Dir, error) {
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	files, dirs, err := walk(dir)
+	scanned, dirs, err := walk(dir, readFile)
 	if err != nil {
 		return nil, err
 	}
-	h, err := render(dir, files, dirs)
+	h, err := render(scanned, dirs)
 	if err != nil {
 		return nil, err
+	}
+	files := make([]File, len(scanned))
+	for i, f := range scanned {
+		files[i] = f.File
 	}
 	return &Dir{Path: dir, TreeSHA256: treeSHA256(files), Files: files, Harness: h}, nil
 }
@@ -99,7 +115,7 @@ func Load(dir string) (*Dir, error) {
 // in path order. Directories are listed because an empty one is invisible
 // to the digest and still means something: a skill that was meant to be
 // added.
-func walk(dir string) (files []File, dirs []string, err error) {
+func walk(dir string, readFile func(string) ([]byte, error)) (files []scannedFile, dirs []string, err error) {
 	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("harnessdir: %s: %w", dir, err)
@@ -128,7 +144,7 @@ func walk(dir string) (files []File, dirs []string, err error) {
 		if !d.Type().IsRegular() {
 			return fmt.Errorf("harnessdir: %s is not a regular file", rel)
 		}
-		b, err := os.ReadFile(p)
+		b, err := readFile(p)
 		if err != nil {
 			return fmt.Errorf("harnessdir: read %s: %w", rel, err)
 		}
@@ -136,7 +152,7 @@ func walk(dir string) (files []File, dirs []string, err error) {
 			return fmt.Errorf("harnessdir: %s is not valid UTF-8; proposers only see text", rel)
 		}
 		sum := sha256.Sum256(b)
-		files = append(files, File{Path: rel, SHA256: hex.EncodeToString(sum[:])})
+		files = append(files, scannedFile{File: File{Path: rel, SHA256: hex.EncodeToString(sum[:])}, body: b})
 		return nil
 	})
 	if err != nil {
@@ -158,24 +174,17 @@ func treeSHA256(files []File) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// render turns the tree into the value the prompt templates take. Only the
-// three surfaces are read; the file list already carries the rest.
-func render(dir string, files []File, dirs []string) (prompt.Harness, error) {
+// render turns the scanned tree into the value the prompt templates take.
+// Its bytes are those that supplied the file hashes, rather than a second
+// filesystem read after the manifest has been built.
+func render(files []scannedFile, dirs []string) (prompt.Harness, error) {
 	var h prompt.Harness
 	for _, f := range files {
 		switch {
 		case f.Path == systemPromptFile:
-			b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(f.Path)))
-			if err != nil {
-				return h, err
-			}
-			h.SystemAppendix = strings.TrimRight(string(b), "\n")
+			h.SystemAppendix = strings.TrimRight(string(f.body), "\n")
 		case strings.HasPrefix(f.Path, memoryDir+"/") && strings.HasSuffix(f.Path, ".md"):
-			b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(f.Path)))
-			if err != nil {
-				return h, err
-			}
-			body := strings.TrimRight(string(b), "\n")
+			body := strings.TrimRight(string(f.body), "\n")
 			if strings.TrimSpace(body) == "" {
 				continue // an empty note says nothing; rendering it says nothing louder
 			}
@@ -188,18 +197,18 @@ func render(dir string, files []File, dirs []string) (prompt.Harness, error) {
 			if err := checkSkillName(name); err != nil {
 				return h, err
 			}
-			b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(f.Path)))
-			if err != nil {
-				return h, err
-			}
-			desc := Description(string(b))
+			desc := Description(string(f.body))
 			if desc == "" {
 				return h, fmt.Errorf("harnessdir: skill %q has no description: %s needs a frontmatter description or a first line", name, f.Path)
 			}
 			h.Skills = append(h.Skills, prompt.Skill{Name: name, Description: desc})
 		}
 	}
-	if err := checkSkillDirs(files, dirs, h.Skills); err != nil {
+	publicFiles := make([]File, len(files))
+	for i, f := range files {
+		publicFiles[i] = f.File
+	}
+	if err := checkSkillDirs(publicFiles, dirs, h.Skills); err != nil {
 		return prompt.Harness{}, err
 	}
 	// Notes and skills come out of walk in path order, which is the order

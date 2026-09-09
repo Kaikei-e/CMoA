@@ -100,6 +100,50 @@ func TestLoadEverySurface(t *testing.T) {
 	}
 }
 
+func TestLoadRendersTheHashedSnapshot(t *testing.T) {
+	dir := write(t, map[string]string{
+		"system-prompt.md": "Snapshot contract.\n",
+		"memory/a.md":      "Snapshot note.\n",
+		"hooks.json":       "{}\n",
+	})
+	reads := map[string]int{}
+	readFile := func(name string) ([]byte, error) {
+		reads[name]++
+		body, err := os.ReadFile(name)
+		if err != nil {
+			return nil, err
+		}
+		// Replacing a file after its one scan is deterministic. A second read
+		// for rendering would inject this replacement while retaining the
+		// hash of body above.
+		if filepath.Base(name) == systemPromptFile {
+			if err := os.WriteFile(name, []byte("Replacement contract.\n"), 0o644); err != nil {
+				return nil, err
+			}
+		}
+		return body, nil
+	}
+
+	d, err := load(dir, readFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Harness.SystemAppendix != "Snapshot contract." {
+		t.Fatalf("system appendix = %q", d.Harness.SystemAppendix)
+	}
+	sum := sha256.Sum256([]byte("Snapshot contract.\n"))
+	for _, f := range d.Files {
+		if f.Path == systemPromptFile && f.SHA256 != hex.EncodeToString(sum[:]) {
+			t.Fatalf("system-prompt sha256 = %s", f.SHA256)
+		}
+	}
+	for name, n := range reads {
+		if n != 1 {
+			t.Fatalf("%s read %d times, want one", name, n)
+		}
+	}
+}
+
 func TestTreeSHA256(t *testing.T) {
 	files := map[string]string{"memory/a.md": "A\n", "skills/s/SKILL.md": "d\n"}
 	a, err := Load(write(t, files))
