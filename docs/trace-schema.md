@@ -89,9 +89,10 @@ correlate a bad run with prompt length.
 `tree_sha256` is sha256 over the concatenation of `<path>\n<sha256>\n` for
 each entry of `files`, in that order. The whole tree is one number, so a
 renderer's claim about what it wrote and CMoA's record of what it read
-compare in one comparison. **The digest is computed by CMoA from the
-directory it read**; a manifest the renderer supplies is never copied into
-the trace.
+compare in one comparison. **CMoA reads each file once and computes the
+digest and rendered surfaces from those same bytes**; a manifest the renderer
+supplies is never copied into the trace. Replacing a file while that load is
+in progress therefore cannot pair an earlier digest with later injected text.
 
 The digest is over *files*. An empty directory does not reach it, so two
 trees that differ only by one cannot be told apart by the comparison — which
@@ -215,9 +216,11 @@ task's `reference.diff` is itself empty, how a reference solution that *is*
 the tree at `rev` is verified.
 
 The Compose runner checks Docker daemon access before starting a verifier.
-A failed daemon check is `runner_error`; candidate stderr text is not used to
-infer a daemon failure. This preflight does not classify every failure that
-can occur after a verifier starts.
+The command has a 10-second deadline, shortened by a smaller positive verifier
+timeout; bounded process cleanup can follow the deadline. A failed daemon
+check is `runner_error`; candidate stderr text is not used to infer a daemon
+failure. This preflight does not classify every failure that can occur after a
+verifier starts.
 
 ### band verifiers
 
