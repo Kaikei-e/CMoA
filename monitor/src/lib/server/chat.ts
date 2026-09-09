@@ -1,4 +1,5 @@
 import type { ServeConfig } from '$lib/types';
+import { viaGateway } from './config';
 import { NO_STORE } from './http';
 
 /**
@@ -43,6 +44,11 @@ export interface ChatRelayOptions {
 	configError?: string | null;
 	/** Injected in tests; the platform `fetch` otherwise. */
 	fetch?: typeof globalThis.fetch;
+	/**
+	 * Translate a loopback `serve.listen` to this host when explicitly set.
+	 * The destination must be reachable; repository Compose leaves this unset.
+	 */
+	gateway?: string;
 }
 
 /** The OpenAI error envelope, which is also CMoA's. */
@@ -154,7 +160,8 @@ export async function relayChat(request: Request, options: ChatRelayOptions): Pr
 	}
 
 	const fetchImpl = options.fetch ?? globalThis.fetch;
-	const url = `http://${serve.listen}/v1/chat/completions`;
+	const listen = viaGateway(serve.listen, options.gateway ?? '');
+	const url = `http://${listen}/v1/chat/completions`;
 	let upstream: Response;
 	try {
 		upstream = await fetchImpl(url, {
@@ -174,14 +181,19 @@ export async function relayChat(request: Request, options: ChatRelayOptions): Pr
 			});
 		}
 		return errorResponse(502, {
-			message: `cmoa serve unreachable at ${serve.listen}`,
+			message: `cmoa serve unreachable at ${listen}`,
 			type: 'monitor'
 		});
 	}
 
 	const answer = await upstream.text();
+	const requestID = upstream.headers.get('x-cmoa-request-id');
 	return new Response(answer, {
 		status: upstream.status,
-		headers: { ...NO_STORE, 'content-type': 'application/json' }
+		headers: {
+			...NO_STORE,
+			'content-type': 'application/json',
+			...(requestID ? { 'x-cmoa-request-id': requestID } : {})
+		}
 	});
 }

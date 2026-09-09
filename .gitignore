@@ -2,6 +2,10 @@ docs/internal/
 local/
 /cmoa
 /bin/
+/.env
+/cmoa.json
+/compose.override.yaml
+/compose.override.yml
 examples/*/repo/
 examples/*/runs/
 monitor/node_modules/

@@ -1,9 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { resolve } from 'node:path';
-import { ConfigError, loadConfig, readEnv, serverBase } from './config';
+import { ConfigError, loadConfig, readEnv, serverBase, viaGateway } from './config';
 import { fixture } from './testing';
 
 const CONFIG = fixture('config', 'cmoa.json');
+
+describe('viaGateway', () => {
+	it('rewrites loopback hosts and leaves others', () => {
+		expect(viaGateway('http://127.0.0.1:8081', 'host.docker.internal')).toBe(
+			'http://host.docker.internal:8081'
+		);
+		expect(viaGateway('127.0.0.1:8095', 'host.docker.internal')).toBe('host.docker.internal:8095');
+		expect(viaGateway('http://localhost:8090/v1', 'host.docker.internal')).toBe(
+			'http://host.docker.internal:8090/v1'
+		);
+		expect(viaGateway('http://[::1]:8095', 'host.docker.internal')).toBe(
+			'http://host.docker.internal:8095'
+		);
+		expect(viaGateway('http://192.168.1.4:8081', 'host.docker.internal')).toBe(
+			'http://192.168.1.4:8081'
+		);
+		expect(viaGateway('http://127.0.0.1:8081', '')).toBe('http://127.0.0.1:8081');
+	});
+});
 
 describe('serverBase', () => {
 	it('drops one trailing /v1 and any trailing slashes', () => {
@@ -75,5 +94,12 @@ describe('readEnv', () => {
 	it('ignores an unusable interval', () => {
 		expect(readEnv({ CMOA_CONFIG: CONFIG, CMOA_MONITOR_INTERVAL_MS: 'soon' }).intervalMs).toBe(500);
 		expect(readEnv({ CMOA_CONFIG: CONFIG, CMOA_MONITOR_INTERVAL_MS: '1' }).intervalMs).toBe(500);
+	});
+
+	it('reads CMOA_MONITOR_GATEWAY', () => {
+		expect(readEnv({ CMOA_CONFIG: CONFIG }).gateway).toBe('');
+		expect(readEnv({ CMOA_CONFIG: CONFIG, CMOA_MONITOR_GATEWAY: 'host.docker.internal' }).gateway).toBe(
+			'host.docker.internal'
+		);
 	});
 });

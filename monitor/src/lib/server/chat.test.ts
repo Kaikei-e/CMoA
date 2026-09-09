@@ -79,7 +79,13 @@ describe('validateMessages', () => {
 
 describe('relayChat', () => {
 	it('forwards the pool name, the messages and stream: false', async () => {
-		const { fetch, requests } = stubFetch({ [UPSTREAM]: { status: 200, body: COMPLETION } });
+		const { fetch, requests } = stubFetch({
+			[UPSTREAM]: {
+				status: 200,
+				body: COMPLETION,
+				headers: { 'x-cmoa-request-id': 'req_20260101T000000Z-11111111' }
+			}
+		});
 		const response = await relayChat(
 			ask({
 				messages: [
@@ -93,6 +99,7 @@ describe('relayChat', () => {
 
 		expect(response.status).toBe(200);
 		expect(requests).toHaveLength(1);
+		expect(response.headers.get('x-cmoa-request-id')).toBe('req_20260101T000000Z-11111111');
 		expect(requests[0].url).toBe(UPSTREAM);
 		expect(requests[0].init?.method).toBe('POST');
 		expect(JSON.parse(String(requests[0].init?.body))).toEqual({
@@ -117,9 +124,16 @@ describe('relayChat', () => {
 	});
 
 	it('passes a 502 no_candidate through with its run id', async () => {
-		const { fetch } = stubFetch({ [UPSTREAM]: { status: 502, body: NO_CANDIDATE } });
+		const { fetch } = stubFetch({
+			[UPSTREAM]: {
+				status: 502,
+				body: NO_CANDIDATE,
+				headers: { 'x-cmoa-request-id': 'req_20260101T001000Z-22222222' }
+			}
+		});
 		const response = await relayChat(ask(HELLO), { serve: SERVE, fetch });
 		expect(response.status).toBe(502);
+		expect(response.headers.get('x-cmoa-request-id')).toBe('req_20260101T001000Z-22222222');
 		const body = await response.json();
 		expect(body.error.type).toBe('no_candidate');
 		expect(body.error.code).toBe('invalid_output');
@@ -139,6 +153,19 @@ describe('relayChat', () => {
 			message: 'cmoa serve unreachable at 127.0.0.1:8495',
 			type: 'monitor'
 		});
+	});
+
+	it('relays through CMOA_MONITOR_GATEWAY when listen is loopback', async () => {
+		const { fetch, calls } = stubFetch({
+			'http://host.docker.internal:8495/v1/chat/completions': { status: 200, body: COMPLETION }
+		});
+		const response = await relayChat(ask(HELLO), {
+			serve: SERVE,
+			fetch,
+			gateway: 'host.docker.internal'
+		});
+		expect(response.status).toBe(200);
+		expect(calls).toEqual(['http://host.docker.internal:8495/v1/chat/completions']);
 	});
 
 	it('rejects a bad body with 400 and asks the pool for nothing', async () => {

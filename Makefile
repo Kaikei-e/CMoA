@@ -1,7 +1,7 @@
 GO ?= go
 GOLANGCI ?= golangci-lint
 
-.PHONY: build test lint vet docdag e2e clean
+.PHONY: build test lint vet docdag e2e clean up down compose-build
 
 build:
 	$(GO) build -o bin/cmoa ./cmd/cmoa
@@ -24,3 +24,14 @@ e2e: build
 
 clean:
 	rm -rf bin
+
+# CMOA_CONFIG must be a host cmoa.json whose vault, runs_dir and fleet
+# endpoints are reachable on this machine. See compose.yaml.
+up:
+	sh deploy/up.sh
+
+down:
+	docker compose down
+
+compose-build:
+	docker compose build

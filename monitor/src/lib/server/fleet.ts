@@ -5,6 +5,7 @@ import type {
 	ProbeMode,
 	ServerReading
 } from '$lib/types';
+import { viaGateway } from './config';
 
 /** watch.sh gives every sampler `curl -m 0.4`; a slow server must not stall a tick. */
 export const PROBE_TIMEOUT_MS = 400;
@@ -192,6 +193,8 @@ interface ServerState {
 export interface FleetOptions {
 	timeoutMs?: number;
 	fetchImpl?: FetchLike;
+	/** Rewrite loopback probe URLs through this host. Empty means no rewrite. */
+	gateway?: string;
 }
 
 /**
@@ -203,11 +206,13 @@ export class Fleet {
 	private readonly serveListen: string | null;
 	private readonly timeoutMs: number;
 	private readonly fetchImpl: FetchLike;
+	private readonly gateway: string;
 	private last: FleetState;
 
 	constructor(config: MonitorConfig, options: FleetOptions = {}) {
 		this.timeoutMs = options.timeoutMs ?? PROBE_TIMEOUT_MS;
 		this.fetchImpl = options.fetchImpl ?? fetch;
+		this.gateway = options.gateway ?? '';
 		this.servers = config.proposers.map((p) => ({
 			id: p.id,
 			role: 'proposer' as const,
@@ -253,11 +258,16 @@ export class Fleet {
 		const [readings, serveReachable] = await Promise.all([
 			Promise.all(
 				this.servers.map((server) =>
-					sampleServer(server.baseUrl, server.mode, this.timeoutMs, this.fetchImpl)
+					sampleServer(
+						viaGateway(server.baseUrl, this.gateway),
+						server.mode,
+						this.timeoutMs,
+						this.fetchImpl
+					)
 				)
 			),
 			this.serveListen
-				? sampleServe(this.serveListen, this.timeoutMs, this.fetchImpl)
+				? sampleServe(viaGateway(this.serveListen, this.gateway), this.timeoutMs, this.fetchImpl)
 				: Promise.resolve(false)
 		]);
 

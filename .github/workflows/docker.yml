@@ -1,0 +1,39 @@
+name: docker
+
+on:
+  push:
+    paths:
+      - "compose.yaml"
+      - "deploy/**"
+      - ".dockerignore"
+      - "go.mod"
+      - "cmoa.go"
+      - "cmd/**"
+      - "internal/**"
+      - "monitor/**"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    paths:
+      - "compose.yaml"
+      - "deploy/**"
+      - ".dockerignore"
+      - "go.mod"
+      - "cmoa.go"
+      - "cmd/**"
+      - "internal/**"
+      - "monitor/**"
+      - ".github/workflows/docker.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CMOA_CONFIG: /tmp/cmoa.json
+      CMOA_BIND: /tmp
+      CMOA_UID: "1000"
+      CMOA_GID: "1000"
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh -n deploy/up.sh
+      - run: docker compose config >/dev/null
+      - run: docker compose build

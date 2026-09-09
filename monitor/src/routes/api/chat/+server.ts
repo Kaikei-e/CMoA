@@ -11,10 +11,13 @@ import { getMonitor } from '$lib/server/stream';
 export const POST: RequestHandler = async ({ request }) => {
 	let serve: ServeConfig | null = null;
 	let configError: string | null = null;
+	let gateway = '';
 	try {
-		serve = getMonitor().env.config.serve ?? null;
+		const monitor = getMonitor();
+		serve = monitor.env.config.serve ?? null;
+		gateway = monitor.env.gateway;
 	} catch (err) {
 		configError = (err as Error).message;
 	}
-	return relayChat(request, { serve, configError });
+	return relayChat(request, { serve, configError, gateway });
 };

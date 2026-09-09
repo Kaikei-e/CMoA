@@ -19,6 +19,31 @@ export function serverBase(url: string): string {
 	return trimmed.endsWith('/v1') ? trimmed.slice(0, -3).replace(/\/+$/, '') : trimmed;
 }
 
+// WHATWG URL keeps IPv6 brackets in hostname ("[::1]").
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
+
+/**
+ * Rewrite a loopback URL or `host:port` to an explicitly reachable host.
+ * This changes the address only; the listener must accept that address.
+ * Non-loopback hosts are left alone. The original
+ * string's shape is kept: `host:port` stays without a scheme.
+ */
+export function viaGateway(target: string, gateway: string): string {
+	const host = (gateway ?? '').trim();
+	if (!host || !target) return target;
+	const hadScheme = /^https?:\/\//i.test(target);
+	let parsed: URL;
+	try {
+		parsed = new URL(hadScheme ? target : `http://${target}`);
+	} catch {
+		return target;
+	}
+	if (!LOOPBACK_HOSTS.has(parsed.hostname)) return target;
+	parsed.hostname = host;
+	if (hadScheme) return parsed.toString().replace(/\/$/, '');
+	return `${parsed.hostname}${parsed.port ? `:${parsed.port}` : ''}`;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
 	return value && typeof value === 'object' && !Array.isArray(value)
 		? (value as Record<string, unknown>)
@@ -91,6 +116,12 @@ export interface MonitorEnv {
 	roots: string[];
 	calibrationsDir: string | null;
 	intervalMs: number;
+	/**
+	 * When set, loopback `base_url` and `serve.listen` are reached through this
+	 * host instead. Repository Compose uses host networking and leaves this
+	 * unset; translating an address does not expose a loopback-only listener.
+	 */
+	gateway: string;
 }
 
 /**
@@ -129,5 +160,7 @@ export function readEnv(env: NodeJS.ProcessEnv = process.env): MonitorEnv {
 	const intervalMs =
 		Number.isFinite(interval) && interval >= 50 ? Math.floor(interval) : DEFAULT_INTERVAL_MS;
 
-	return { configPath: config.path, config, roots, calibrationsDir, intervalMs };
+	const gateway = (env.CMOA_MONITOR_GATEWAY ?? '').trim();
+
+	return { configPath: config.path, config, roots, calibrationsDir, intervalMs, gateway };
 }

@@ -17,6 +17,7 @@ the trace the screen then reads back.
 | `CMOA_MONITOR_ROOTS` | `:`-separated roots to watch. Each is a run directory (`run.json`), a task or request directory (`runs/`), or a serve root whose children hold `runs/`. The kind is detected, not configured | `serve.runs_dir` from the config, resolved against the config file |
 | `CMOA_MONITOR_CALIBRATIONS` | directory of `kind: calibration` Markdown documents | `<harness.vault>/spec/calibrations` |
 | `CMOA_MONITOR_INTERVAL_MS` | polling period | `500` |
+| `CMOA_MONITOR_GATEWAY` | rewrite loopback `base_url` and `serve.listen` through this host when probing and relaying | empty (no rewrite) |
 | `HOST` / `PORT` | where the built server listens | `0.0.0.0` / `3000` |
 
 Without `CMOA_CONFIG` the server starts and every API route answers `503` with
@@ -38,6 +39,17 @@ CMOA_CONFIG=/srv/cmoa/cmoa.json \
 CMOA_MONITOR_ROOTS=/srv/cmoa/serve-runs \
 HOST=127.0.0.1 PORT=3999 node build
 ```
+
+To start the monitor next to `cmoa serve` without a host Node toolchain, from
+the repository root:
+
+```sh
+CMOA_CONFIG=/srv/cmoa/cmoa.json make up
+```
+
+The monitor is then at `http://127.0.0.1:3999`. Paths in that command are
+examples; use your own `cmoa.json`. Compose details are in the root
+[README](../README.md) and [ADR 0017](../docs/adr/0017-monitor-host-network-all-interfaces.md).
 
 ## HTTP surface
 
@@ -63,7 +75,9 @@ minutes, not seconds) and returns the upstream body and status unchanged: a
 `judge_failed` and `504` for `judge_timeout`. A pool already busy with
 `max_inflight` rounds queues the request rather than refusing it. Without a
 `serve` block in the config the route answers `503`, and an unreachable pool is
-`502 cmoa serve unreachable at <listen>`.
+`502 cmoa serve unreachable at <listen>`. When the pool supplies
+`X-CMoA-Request-ID`, the relay returns it too, so the request can be joined to
+serve's terminal performance record.
 
 SSE events:
 

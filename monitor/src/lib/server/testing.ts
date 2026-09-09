@@ -75,7 +75,7 @@ export function judgeSample(overrides: Partial<FleetSample> = {}): FleetSample {
  * stub that has to fail rather than answer.
  */
 export function stubFetch(
-	routes: Record<string, { status: number; body: string } | (() => never)>
+	routes: Record<string, { status: number; body: string; headers?: HeadersInit } | (() => never)>
 ): { fetch: typeof fetch; calls: string[]; requests: { url: string; init?: RequestInit }[] } {
 	const calls: string[] = [];
 	const requests: { url: string; init?: RequestInit }[] = [];
@@ -86,7 +86,7 @@ export function stubFetch(
 		const route = routes[url];
 		if (!route) return new Response('not found', { status: 404 });
 		if (typeof route === 'function') return route();
-		return new Response(route.body, { status: route.status });
+		return new Response(route.body, { status: route.status, headers: route.headers });
 	}) as typeof fetch;
 	return { fetch: impl, calls, requests };
 }

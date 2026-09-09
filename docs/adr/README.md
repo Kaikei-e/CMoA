@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Thirteen records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
+Seventeen records stand behind what CMoA is. They are the reasoning; the code under `internal/` and the
 trace schema in [../trace-schema.md](../trace-schema.md) are what the binary does, so a record is
 read for *why* a flag, a status name or a file exists, and the code for what it accepts today.
 Records 0002 onward are written in Japanese, the language they were argued in.
@@ -12,12 +12,14 @@ which fixed v0 at three commands and no judge; 0009 in turn superseded 0002. 001
 changes exactly one of its decisions: how the chat face turns six pairwise verdicts into one answer.
 Everything else 0011 decided is carried forward word for word, so 0011 is still the record to read for
 what v1 *is*, and 0013 for how it now chooses. All three stay as the records the others were argued
-against.
+against. 0014 packaged the two resident processes as containers; 0017 is the current packaging
+record (both on the host network, monitor on `0.0.0.0:3999`). None of them change how CMoA
+selects, listens or observes.
 0003 through 0008 each take one of the four responsibilities CMoA owns and settle it; they depend on
 0002 and, where noted, on each other, and can otherwise be read in any order.
 
 Every record is **Accepted** except 0002, which 0009 superseded on 2026-09-05, 0009, which 0011 superseded on 2026-09-06,
-and 0011, which 0013 superseded the same day. A decision that
+0011, which 0013 superseded the same day, 0014, which 0015 superseded on 2026-09-08, 0015, which 0016 superseded the same day, and 0016, which 0017 superseded the same day. A decision that
 replaces one of these declares `supersedes:` in its frontmatter and moves the old record's status to
 `superseded`; nobody edits an accepted record to change what it decided. `docdag validate` is the
 gate that keeps that true. Record numbers in frontmatter are **quoted** (`supersedes: ["0011"]`):
@@ -185,3 +187,31 @@ presentation position or the proposer order, because 0011's argument against tho
 kept. `outcome.kind` does not move, so the calibration above keeps counting; `cycle`,
 `no_majority` and `all_draws` stay in the vocabulary as words older traces carry, and are no longer
 produced. It supersedes 0011 and keeps every other decision 0011 made.
+
+## [0014 — containerize serve and the monitor](0014-containerize-serve-and-monitor.md) — superseded by 0015
+
+The record that ships the two resident processes without adding a seventh command. `cmoa serve` and
+CMoA Monitor stay separate images; Compose started both on the host network and bind-mounts the
+operator's directories at the same host paths, so an existing loopback `cmoa.json` does not have to
+be rewritten and `--allow-remote` stays off by default. It does not start model servers, does not
+hand the coding-face verifier a Docker socket, and does not embed the monitor in the Go binary.
+Depends on 0012. 0015 keeps that split and the host-network serve, and publishes the monitor's port.
+
+## [0015 — publish the monitor on 3999](0015-publish-monitor-port.md) — superseded by 0016
+
+Host network does not honour Compose `ports:`, so 3999 never appeared as a forwarded port. The
+monitor now listens inside a bridge network; loopback fleet URLs are reached through
+`host.docker.internal` on outbound probes and the chat relay only. `cmoa serve` stays on the host
+network. Supersedes 0014. The first publish bound only `127.0.0.1`, which Cursor's auto-forward
+does not pick up.
+
+## [0016 — publish monitor 3999 on all interfaces](0016-publish-monitor-on-all-interfaces.md) — superseded by 0017
+
+Cursor auto-forwards ports that listen on `0.0.0.0`, not loopback-only publishes. Bridge
+`3999:3999` opened the page but could not reach a host-loopback `cmoa serve`.
+
+## [0017 — monitor on host network at 0.0.0.0:3999](0017-monitor-host-network-all-interfaces.md)
+
+`host.docker.internal` does not reach processes bound to the host's `127.0.0.1`. Both
+containers use the host network; the monitor binds `0.0.0.0:3999` so Cursor can forward
+it, and `cmoa serve` stays on loopback. Supersedes 0016.

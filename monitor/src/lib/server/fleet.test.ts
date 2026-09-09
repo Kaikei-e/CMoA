@@ -184,6 +184,23 @@ describe('Fleet', () => {
 		expect(state.serve).toEqual({ listen: '127.0.0.1:8095', reachable: true });
 	});
 
+	it('probes loopback servers through CMOA_MONITOR_GATEWAY', async () => {
+		const seen: string[] = [];
+		const impl = (async (input: RequestInfo | URL) => {
+			seen.push(String(input));
+			const url = String(input);
+			if (url.endsWith('/slots')) return new Response(slotsBody(1), { status: 200 });
+			if (url.endsWith('/v1/models')) return new Response('{"data":[]}', { status: 200 });
+			return new Response('', { status: 404 });
+		}) as typeof fetch;
+		const fleet = new Fleet(config, { timeoutMs: 50, fetchImpl: impl, gateway: 'host.docker.internal' });
+		const state = await fleet.sample(1000);
+		expect(seen.some((u) => u.startsWith('http://host.docker.internal:8081/'))).toBe(true);
+		expect(seen.some((u) => u === 'http://host.docker.internal:8095/v1/models')).toBe(true);
+		expect(state.servers[0].baseUrl).toBe('http://127.0.0.1:8081');
+		expect(state.serve).toEqual({ listen: '127.0.0.1:8095', reachable: true });
+	});
+
 	it('subtracts a /metrics baseline and re-zeroes it on demand', async () => {
 		let total = 2000;
 		const impl = (async (input: RequestInfo | URL) => {

@@ -1,0 +1,46 @@
+# CMoA serve and monitor share the host network so loopback fleet URLs
+# in cmoa.json work. The monitor binds 0.0.0.0:3999 so Cursor can forward
+# it; Docker `ports:` cannot, because host-network processes are already
+# on the host. Narrow the monitor with CMOA_MONITOR_HOST=127.0.0.1.
+#
+# One-liner from the repository root:
+#   make up
+#   CMOA_CONFIG=/path/to/cmoa.json ./deploy/up.sh
+name: cmoa
+
+services:
+  cmoa:
+    build:
+      context: .
+      dockerfile: deploy/cmoa.Dockerfile
+    image: cmoa:local
+    network_mode: host
+    init: true
+    user: "${CMOA_UID:-1000}:${CMOA_GID:-1000}"
+    environment:
+      HOME: ${HOME}
+      CMOA_CONFIG: ${CMOA_CONFIG:-}
+    volumes:
+      - ${CMOA_BIND:-${HOME}}:${CMOA_BIND:-${HOME}}
+    command: ["serve"]
+
+  monitor:
+    build:
+      context: monitor
+      dockerfile: Dockerfile
+    image: cmoa-monitor:local
+    network_mode: host
+    init: true
+    user: "${CMOA_UID:-1000}:${CMOA_GID:-1000}"
+    environment:
+      HOME: ${HOME}
+      CMOA_CONFIG: ${CMOA_CONFIG:-}
+      CMOA_MONITOR_ROOTS: ${CMOA_MONITOR_ROOTS:-}
+      CMOA_MONITOR_CALIBRATIONS: ${CMOA_MONITOR_CALIBRATIONS:-}
+      CMOA_MONITOR_INTERVAL_MS: ${CMOA_MONITOR_INTERVAL_MS:-}
+      HOST: ${CMOA_MONITOR_HOST:-0.0.0.0}
+      PORT: ${CMOA_MONITOR_PORT:-3999}
+    volumes:
+      - ${CMOA_BIND:-${HOME}}:${CMOA_BIND:-${HOME}}:ro
+    depends_on:
+      - cmoa

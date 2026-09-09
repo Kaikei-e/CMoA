@@ -20,7 +20,8 @@ on it. See the [roadmap](docs/roadmap.md) for scope and status.
 The Go runtime uses only the standard library. Building requires Go 1.27.1 or
 later; runs need Git, DocDag, and running OpenAI-compatible model endpoints.
 Coding verification also needs Docker Compose. The optional monitor has its own
-Node/SvelteKit dependencies.
+Node/SvelteKit dependencies; `cmoa serve` and the monitor can also be started
+together with the repository Compose file.
 
 From the repository root:
 
@@ -196,6 +197,21 @@ process rather than model-server or network time.
 [CMoA Monitor](monitor/README.md) is a separate SvelteKit UI for fleet health,
 run history, candidate/judge inspection and a chat panel. It reads traces and
 server metrics; its chat panel forwards requests to `cmoa serve`.
+
+To start both as containers from the repository root, with proposers and the
+judge already listening at the URLs in `cmoa.json`:
+
+```sh
+make up                          # uses ./cmoa.json when it exists
+CMOA_CONFIG=/path/to/cmoa.json make up
+```
+
+`make up` is `./deploy/up.sh`. Compose builds two images and runs them on the host
+network so loopback fleet URLs keep working. The monitor binds `0.0.0.0:3999`
+(`http://127.0.0.1:3999`). Ctrl+C stops both. It does not start model servers and
+does not pass `--allow-remote`. Vault and `serve.runs_dir` must sit under
+`CMOA_BIND`. Bind the monitor only to loopback with `CMOA_MONITOR_HOST=127.0.0.1`.
+See [ADR 0017](docs/adr/0017-monitor-host-network-all-interfaces.md).
 
 ## Development
 
