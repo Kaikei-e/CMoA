@@ -13,3 +13,19 @@ monitor/build/
 monitor/.svelte-kit/
 monitor/test-results/
 monitor/playwright-report/
+
+# Private P1 evaluation inputs and outputs, including anonymized material.
+# Keep content-bearing generators beside the private data, never in fixtures.
+/data/
+/datasets/
+/evaluation-data/
+/private/
+/examples/p1-chat/
+/examples/p1-code/
+**/label-packets/
+**/holdout-registry/
+**/assessment-*/
+**/packet.md
+**/mapping.json
+**/answers.json
+**/annotations.json
